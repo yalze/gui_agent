@@ -1,5 +1,5 @@
 \documentclass{article}
-\usepackage[UTF8, scheme=plain, fontset=fandol, heading=false]{ctex}
+\usepackage{CJKutf8}
 \usepackage[preprint]{neurips_2026}
 \usepackage{booktabs}
 \usepackage{amsfonts}
@@ -25,6 +25,7 @@
 }
 
 \begin{document}
+\begin{CJK}{UTF8}{gbsn}
 \maketitle
 
 \begin{abstract}
@@ -46,7 +47,7 @@
 
 本文的主要贡献如下：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item 设计并实现了 GUI 感知层（ScreenCaptor），将安卓屏幕的多源信息（控件树 XML、截图、前台应用、Activity）统一封装为结构化的 \texttt{ScreenState} 数据模型，为上层决策提供一致的感知接口。
   \item 提出了基于多维度对比的页面变化检测机制，通过同时比对包名、Activity 和控件树内容三个维度，实现高效、准确的页面跳转判断，支撑操作后验证和智能等待功能。
   \item 设计了控件树截断策略，在保证语法有效性的前提下将超长 XML 截断至大语言模型可接受的长度，兼顾信息完整性和上下文限制。
@@ -123,7 +124,7 @@
 
 各层职责概述如下：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{推理层（第 1 层）}：接收用户的自然语言指令，通过 Skill 领域识别、人在环路（HITL）信息补全、子任务分解（DAG）三个步骤，将模糊的高层指令转化为结构化的可执行任务树。该层由殷龙飞负责。
   \item \textbf{感知层（第 2 层）}：采集安卓屏幕的多源信息（控件树 XML、截图、前台包名、Activity），统一封装为结构化的屏幕状态。同时提供页面变化检测、App 名称映射等辅助功能。该层由张耀之（本文作者）负责，是本文的重点内容。
   \item \textbf{交互层（第 3 层）}：接收推理层的任务树，在感知层提供的屏幕状态基础上，完成步骤拆解、控件语义匹配、操作执行和结果验证。该层由陈昊负责，作者参与了部分设计讨论。
@@ -146,7 +147,7 @@
 
 感知层的设计遵循以下原则：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{统一接口}：无论底层使用何种自动化框架（uiautomator2、Appium、ADB 等），向上层提供一致的 \texttt{ScreenState} 数据模型，屏蔽底层差异。
   \item \textbf{多源融合}：同时采集控件树、截图、包名、Activity 等多维度信息，为上层决策提供丰富的感知输入。
   \item \textbf{鲁棒性优先}：移动设备环境复杂多变（应用闪退、权限变化、网络延迟等），感知层必须具备容错能力，单点失败不应导致整个系统崩溃。
@@ -181,7 +182,7 @@
 
 选择这些字段的考量如下：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{hierarchy\_xml}是感知的核心产物。它包含了屏幕上所有控件的完整属性，是 LLM 进行控件语义匹配的基础。XML 格式虽然冗长，但信息完整、结构清晰，便于 LLM 理解和解析。
   \item \textbf{screenshot\_path} 保存截图文件路径而非图片二进制数据，是为了避免 \texttt{ScreenState} 对象过大。截图主要用于调试和日志展示，决策主路径不依赖截图内容。
   \item \textbf{timestamp} 记录采样时刻，支持多种时间相关的分析：如页面加载耗时、操作响应时间、两次感知的间隔等。
@@ -238,7 +239,7 @@
 
 设计要点说明：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{分步容错}：三个感知步骤（控件树、App 信息、截图）是独立的 try-catch 块，任何一步失败都不会影响其他步骤的结果。例如截图失败了，控件树和 App 信息仍然可用，系统可以继续运行。这体现了鲁棒性优先的设计原则。
   \item \textbf{错误标记}：控件树获取失败时，不是返回空字符串，而是返回一个带有错误信息的 XML 标签。这样上层模块如果尝试解析 XML 时发现包含 \texttt{<error>} 节点，可以明确知道是感知失败而非空屏幕。
   \item \textbf{截图命名}：截图文件名包含递增序号和时间戳，既便于按顺序查看操作序列，又便于精确定位到具体时刻。
@@ -289,7 +290,7 @@
 
 变化检测的三个维度各有其适用场景：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{包名变化}（最剧烈）：表示从一个 App 切换到了另一个 App，例如从桌面点击图标打开应用。这是最强的变化信号。
   \item \textbf{Activity 变化}（中等强度）：表示在同一 App 内切换了页面，例如从首页跳转到搜索页。这是最常见的页面跳转信号。
   \item \textbf{控件树变化}（最灵敏）：即使 Activity 没变，只要页面内容变了（如列表刷新、弹窗出现、输入文本后控件内容变化），控件树 XML 就会不同。这是最灵敏的检测维度，能够捕捉细微的界面更新。
@@ -346,7 +347,7 @@ def truncate_xml(xml, max_length=15000):
 
 这个功能的价值体现在两个方面：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{日志可读性}：控制台输出和执行报告中显示「当前 App：网易云音乐」比显示「com.netease.cloudmusic」直观得多，便于开发者和用户理解当前状态。
   \item \textbf{LLM 上下文}：将 App 名称而非包名传递给 LLM 作为上下文，可以帮助模型更好地理解当前场景。例如知道当前是「美团外卖」，模型会更容易定位「提交订单」按钮。
 \end{enumerate}
@@ -513,7 +514,7 @@ LLM 在匹配控件时，会根据操作意图和控件类型的对应关系进�
 
 不同设备、不同安卓版本、不同 ROM 的 uiautomator2 表现可能有差异。感知层在设计时考虑了以下兼容性问题：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \texttt{dump\_hierarchy()} 返回的 XML 格式在不同设备上基本一致，是兼容性最好的接口。
   \item \texttt{device.info} 返回的字段名在不同版本的 uiautomator2 中可能有差异（如 \texttt{currentPackageName} vs \texttt{packageName}），代码中使用 \texttt{.get()} 方式取值，字段不存在时返回 None。
   \item 截图功能在少数设备上可能因权限问题失败，此时降级为不截图，不影响主流程。
@@ -537,7 +538,7 @@ LLM 在匹配控件时，会根据操作意图和控件类型的对应关系进�
 
 感知层不是孤立工作的，它与交互层紧密协作，形成「感知-决策-执行-验证」的闭环。具体协作模式如下：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{操作前感知}：每次执行操作前，交互层调用 \texttt{capture()} 获取当前屏幕状态，作为 LLM 控件匹配的输入。
   \item \textbf{操作后验证}：执行点击或输入操作后，交互层再次调用 \texttt{capture()} 获取新的屏幕状态，与操作前对比，判断操作是否真的生效。这是防止「假成功」的关键机制。
   \item \textbf{智能等待}：点击操作后，交互层调用 \texttt{wait\_for\_change()} 等待页面跳转，页面变化后立即继续下一步，避免固定等待时间的浪费。
@@ -581,7 +582,7 @@ LLM 在匹配控件时，会根据操作意图和控件类型的对应关系进�
 
 控件理解层（WidgetUnderstander）是交互层的核心模块，负责将自然语言操作意图映射到控件树中的具体节点。它采用双层匹配策略：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{快速短路层}：对于返回键、Home 键、等待、键盘事件等不需要控件定位的操作，直接用正则规则匹配并返回，无需调用 LLM。这部分在第 4.6 节已有详细介绍。
   \item \textbf{LLM 匹配层}：需要在控件树中寻找目标的操作（点击、输入、长按等），将步骤意图、原始描述、当前应用和 XML 控件树交给 LLM，由模型返回匹配的目标控件和操作类型。
 \end{enumerate}
@@ -592,7 +593,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 交互层的执行器（ActionExecutor）实现了三级降级机制，应对 uiautomator2 在不同设备上的兼容性问题：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{第一级：选择器操作}：优先使用 \texttt{WidgetTarget.to\_selector()} 构建 uiautomator2 选择器，通过属性定位控件并执行操作。这是最稳定、最准确的方式。
   \item \textbf{第二级：坐标降级}：当选择器操作失败时（如出现 -32002 RPC 兼容性错误），使用 LLM 返回的 bounds 中心点坐标进行点击。坐标点击不依赖控件属性，只要坐标正确就能生效。
   \item \textbf{第三级：ADB 命令}：对于输入操作，send\_keys 失败时降级为 \texttt{adb shell input text}；对于键盘操作，直接使用 \texttt{adb shell input keyevent}。
@@ -613,7 +614,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 推理层的职责是接收用户的自然语言指令，输出结构化的 DAG 任务树。其执行流程包括三个阶段：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{Skill 领域识别}：通过关键词匹配判断用户指令属于哪个领域（外卖、酒店、音乐等），加载对应的 Skill 配置。Skill 配置包含该领域的关键信息需求和典型操作模板。
   \item \textbf{人在环路（HITL）信息补全}：对于指令中缺失的关键信息（如歌曲名称、出发地等），通过交互式追问补充。追问分为选择题（由 LLM 生成推荐选项）和填空题两种类型，优先使用选择题以降低用户负担。
   \item \textbf{子任务分解}：调用 LLM 将完整目标分解为有依赖关系的子任务 DAG。每个子任务是一个可直接执行的操作描述，如「在搜索框输入'夜曲'并搜索」。
@@ -632,7 +633,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 恢复层的职责是在执行失败时决定下一步动作。错误分为三个级别：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{可重试错误（RETRYABLE）}：控件未找到、超时、RPC 错误等暂时性问题，直接重试即可。执行层内置 2 次操作级重试，恢复层可以决定是否增加重试次数。
   \item \textbf{可回溯错误}：当前路径走不通，需要回到上一个任务重新尝试其他方式。例如某个按钮点不到，可能需要换一种方式进入目标页面。
   \item \textbf{致命错误（FATAL）}：未知操作类型、缺少必要参数等根本性问题，无法自动恢复，需要请求用户干预。
@@ -692,7 +693,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 针对感知层的测试用例包括：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{正常采集测试}：验证 \texttt{capture()} 在设备正常时能正确返回包含控件树、包名、Activity、截图路径的 \texttt{ScreenState}。
   \item \textbf{控件树获取失败测试}：模拟 \texttt{dump\_hierarchy()} 抛出异常，验证返回的 \texttt{ScreenState} 中包含错误标记的 XML，且 App 信息和截图仍然可用。
   \item \textbf{App 信息获取失败测试}：模拟 \texttt{device.info} 抛出异常，验证返回的 \texttt{ScreenState} 中包名和 Activity 为 None，控件树和截图仍然正常。
@@ -735,7 +736,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 在每个任务的执行过程中，感知层都发挥着关键作用：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{T1（打开 App）}：操作前感知确认当前在桌面（包名为 \texttt{com.android.launcher} 或 \texttt{com.tencent.launcher}）；操作后通过包名变化检测确认网易云音乐已启动（包名变为 \texttt{com.netease.cloudmusic}）。
   \item \textbf{T2（进入搜索页）}：操作前感知获取首页控件树，LLM 在其中找到搜索框；操作后通过控件树变化和 Activity 变化确认已进入搜索界面。
   \item \textbf{T3（搜索歌曲）}：操作前感知获取搜索页控件树，找到搜索输入框；输入完成后，通过键盘事件机制触发搜索（绕过软键盘感知盲区）；操作后通过控件树变化确认搜索结果已加载。
@@ -778,7 +779,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 \textbf{根因分析}：这是 uiautomator2 的 atx-agent 在部分 ROM 上的已知兼容性缺陷。特定的选择器组合在通过 JSON-RPC 调用 \texttt{wait} 方法时，atx-agent 端处理出错，返回 -32002 错误码。
 
 \textbf{解决方案}：
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item 用 \texttt{exists} 显式轮询替代 \texttt{wait()} RPC 调用，绕过有兼容性问题的 RPC 接口。
   \item 实现三级降级机制：选择器失败 → 坐标点击 → ADB 命令。即使选择器完全不可用，仍能通过坐标或 ADB 完成操作。
 \end{enumerate}
@@ -804,7 +805,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 \textbf{根因分析}：截断策略保留前面的节点，但目标可能在后面。对于可滚动页面，初始控件树只包含当前可见区域的控件，下方内容需要滚动后才能出现在控件树中。
 
 \textbf{解决方案}：
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item 当 LLM 返回空目标或目标不明确时，系统会等待片刻后重新抓屏（给页面加载时间）。
   \item 如果仍然找不到，可以执行滑动操作滚动页面，然后重新感知、重新匹配。
   \item 操作后验证机制确保了即使第一次点错了，也会因为页面没变化而重试，不会产生假成功。
@@ -820,7 +821,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 消融实验的四组配置如下：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{完整系统（Full）}：包含所有感知层功能——控件树 + 截图 + App 信息 + 页面变化检测 + 操作后验证 + 键盘事件补偿 + 三级降级。
   \item \textbf{无操作后验证（w/o Verification）}：移除操作后验证机制，操作只要不报错就视为成功。用于验证操作后验证对防止假成功的作用。
   \item \textbf{无键盘事件补偿（w/o Keyboard Fix）}：移除软键盘感知盲区的三层补偿机制，键盘搜索操作也走正常的控件匹配 + 坐标点击流程。用于验证键盘补偿机制的必要性。
@@ -849,7 +850,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 对实验结果的分析如下：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{完整系统}：T1-T3 全部成功，T4（选择播放歌曲）成功率 90\%。T4 偶尔失败的原因是搜索结果列表中「夜曲 - 周杰伦」条目有时不在首屏可见范围内，需要滚动才能看到。
   \item \textbf{无操作后验证}：T3 和 T4 的成功率大幅下降。T3 从 100\% 降到 40\%，主要原因是坐标降级点击搜索按钮时经常点偏，没有验证机制就会误报成功。T4 从 90\% 降到 30\%，原因类似——点错了位置但系统以为成功了。这有力地证明了操作后验证机制的必要性。
   \item \textbf{无键盘事件补偿}：T3（搜索歌曲）成功率为 0\%。这是因为软键盘的搜索按钮不在控件树中，LLM 无法通过控件匹配找到目标，瞎猜的坐标几乎不可能点中正确位置。这个结果验证了软键盘感知盲区问题的严重性，以及三层补偿机制的关键作用。
@@ -885,7 +886,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 综合单元测试、端到端测试和消融实验的结果，可以得出以下结论：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{感知层稳定性高}：在真机/模拟器环境下，感知层的 \texttt{capture()} 接口表现稳定，未出现完全失效的情况。分步容错设计确保了单点失败不影响整体。
   \item \textbf{页面变化检测准确}：多维度对比的变化检测机制能够准确判断页面跳转和内容更新，为操作后验证和智能等待提供了可靠依据。
   \item \textbf{对交互层支撑有效}：感知层提供的结构化屏幕状态，是 LLM 控件语义匹配的基础输入。没有准确的感知，就没有准确的控件定位。
@@ -899,7 +900,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 尽管感知层在测试场景中表现良好，但我们也清醒地认识到其存在的局限性：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{控件树信息不完整}：控件树只能获取可见区域内的控件，不可见区域（如列表下方、折叠菜单内）的控件无法感知。需要配合滚动操作才能逐步探索。
   \item \textbf{视觉信息缺失}：当前感知层以控件树为主、截图为辅，截图主要用于调试而非决策。对于纯视觉元素（如游戏画面、视频内容、Canvas 渲染的界面），控件树完全无法描述。
   \item \textbf{动态内容感知延迟}：控件树是静态快照，无法感知动画、视频等动态内容的实时状态。对于需要等待动画完成的场景，只能通过固定延时或轮询来处理。
@@ -936,7 +937,7 @@ LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resou
 
 感知层不是孤立的，其设计需要与其他层协同优化：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{与推理层协同}：推理层在分解任务时，如果知道感知层的能力边界（如键盘不可见），可以生成更适合执行的任务描述。例如，将「点击搜索按钮」明确描述为「输入后触发搜索」，让执行层选择正确的方式。
   \item \textbf{与交互层协同}：交互层的操作策略会影响感知频率和时机。例如，智能等待机制减少了不必要的感知调用，而操作后验证增加了感知调用。两者需要在效率和可靠性之间取得平衡。
   \item \textbf{与恢复层协同}：恢复层的错误诊断高度依赖感知层提供的状态信息。感知越丰富，错误诊断越准确。例如，知道「控件树中确实没有目标控件」和「控件树获取失败」是完全不同的错误，处理方式也不同。
@@ -948,7 +949,7 @@ GUI 智能体能够自主操作手机，这带来了一定的安全和伦理风�
 
 本系统在设计上考虑了以下安全措施：
 
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item \textbf{人在环路确认}：关键操作（如支付、下单、发送消息等）需要用户确认后才执行。
   \item \textbf{操作可追溯}：每一步操作都有截图和日志，完整记录执行过程，便于事后审计。
   \item \textbf{终止机制}：用户可以随时终止执行，系统会立即停止所有操作。
@@ -1125,7 +1126,7 @@ class ScreenState:
 \textbf{说明}：为避免 Unicode 排版问题，上述 XML 示例中 text 和 content-desc 属性的中文内容使用拼音示意。实际控件树中这些字段为真实的中文文本（如「搜索歌曲、歌手、专辑」「推荐」「热歌榜」等）。
 
 从这个示例可以看出控件树的特点：
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item 深度嵌套的树状结构，从根节点（全屏）逐步细化到具体控件
   \item 每个节点都包含大量属性，但对于 GUI 智能体最关键的是 text、resource-id、class、content-desc、clickable 和 bounds
   \item 布局容器（LinearLayout、FrameLayout 等）通常不可点击，它们只是用来组织子控件的布局
@@ -1182,7 +1183,7 @@ Prompt 的 JSON 输出格式定义如下：
 \end{verbatim}
 
 Prompt 设计的要点：
-\begin{enumerate}[leftmargin=*]
+\begin{enumerate}[leftmargin=1.5em]
   \item 明确告知 LLM 控件树各属性的含义和优先级，引导模型优先使用稳定属性
   \item 明确列出操作类型的判断规则，减少模型的不确定输出
   \item 特别强调软键盘的感知盲区问题，提示模型在相关场景下使用 key\_event
@@ -1279,4 +1280,5 @@ DeepSeek-AI.
 
 \end{thebibliography}
 
+\end{CJK}
 \end{document}
