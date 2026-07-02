@@ -1,36 +1,20 @@
 \documentclass{article}
+\usepackage[UTF8, scheme=plain, fontset=fandol, heading=false]{ctex}
 \usepackage[preprint]{neurips_2026}
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{hyperref}
-\usepackage{url}
 \usepackage{booktabs}
 \usepackage{amsfonts}
-\usepackage{nicefrac}
-\usepackage{microtype}
-\usepackage{xcolor}
-\usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{amssymb}
+\usepackage{graphicx}
 \usepackage{algorithm}
 \usepackage{algorithmic}
 \usepackage{multirow}
 \usepackage{enumitem}
-\usepackage{CJKutf8}
 \usepackage{float}
-\usepackage{listings}
 \usepackage{xcolor}
-
-\lstset{
-  basicstyle=\ttfamily\small,
-  frame=single,
-  breaklines=true,
-  numbers=left,
-  numberstyle=\tiny,
-  commentstyle=\color{gray},
-  keywordstyle=\color{blue},
-  stringstyle=\color{orange},
-}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{microtype}
 
 \title{面向移动端的 GUI 智能体系统：感知层设计与端到端实现}
 
@@ -42,8 +26,6 @@
 
 \begin{document}
 \maketitle
-
-\begin{CJK*}{UTF8}{gbsn}
 
 \begin{abstract}
 本文设计并实现了一个面向移动端的 GUI 智能体系统，该系统能够接收用户的自然语言指令，在安卓设备上自主完成复杂的多步操作任务。系统采用五层架构：推理层、感知层、交互层、恢复层和状态层，各层职责清晰、松耦合协作。本文重点介绍作者（张耀之）负责的 GUI 感知层的设计与实现。感知层作为连接物理设备与智能决策的桥梁，负责将安卓屏幕的视觉信息转化为机器可理解的结构化数据，具体包括控件树 XML 采集、屏幕截图、前台应用识别以及页面变化检测等核心功能。针对移动 GUI 感知中的若干工程挑战，本文提出了一系列解决方案：包括基于多维度对比的页面变化检测机制、控件树截断策略以适配大语言模型上下文限制、软键盘感知盲区的补偿机制，以及鲁棒性设计以应对设备兼容性问题。在网易云音乐播放场景下的端到端测试表明，感知层能够稳定、准确地提供屏幕状态信息，支撑整个智能体系统完成四步连锁操作（打开应用、进入搜索、输入关键词、播放歌曲），验证了感知层设计的有效性和工程实用性。
@@ -224,33 +206,30 @@
     \ENSURE \texttt{ScreenState} 对象
 
     \STATE \texttt{state $\leftarrow$ ScreenState(timestamp=now())}
-    \STATE \COMMENT{Step 1: 获取控件树}
-    \TRY
-      \STATE \texttt{state.hierarchy\_xml $\leftarrow$ device.dump\_hierarchy()}
-    \CATCH
-      \STATE \texttt{state.hierarchy\_xml $\leftarrow$ "<error>获取控件树失败</error>"}
-    \ENDTRY
+    \STATE \textbf{// Step 1: 获取控件树}
+    \STATE \textbf{try:}
+    \STATE \quad \texttt{state.hierarchy\_xml $\leftarrow$ device.dump\_hierarchy()}
+    \STATE \textbf{except:}
+    \STATE \quad \texttt{state.hierarchy\_xml $\leftarrow$ "<error>获取控件树失败</error>"}
 
-    \STATE \COMMENT{Step 2: 获取当前 App 信息}
-    \TRY
-      \STATE \texttt{info $\leftarrow$ device.info}
-      \STATE \texttt{state.current\_package $\leftarrow$ info.currentPackageName}
-      \STATE \texttt{state.current\_activity $\leftarrow$ info.currentActivity}
-    \CATCH
-      \STATE \COMMENT{获取失败则字段保持为 None，不影响主流程}
-    \ENDTRY
+    \STATE \textbf{// Step 2: 获取当前 App 信息}
+    \STATE \textbf{try:}
+    \STATE \quad \texttt{info $\leftarrow$ device.info}
+    \STATE \quad \texttt{state.current\_package $\leftarrow$ info.currentPackageName}
+    \STATE \quad \texttt{state.current\_activity $\leftarrow$ info.currentActivity}
+    \STATE \textbf{except:}
+    \STATE \quad \textbf{// 获取失败则字段保持为 None，不影响主流程}
 
-    \STATE \COMMENT{Step 3: 截图（可选）}
+    \STATE \textbf{// Step 3: 截图（可选）}
     \IF{\texttt{screenshot = True}}
-      \TRY
-        \STATE \texttt{counter $\leftarrow$ counter + 1}
-        \STATE \texttt{filename $\leftarrow$ format("screen\_\{counter:04d\}\_\{timestamp\}.png")}
-        \STATE \texttt{filepath $\leftarrow$ join(screenshot\_dir, filename)}
-        \STATE \texttt{device.screenshot(filepath)}
-        \STATE \texttt{state.screenshot\_path $\leftarrow$ filepath}
-      \CATCH
-        \STATE \PRINT "截图失败"
-      \ENDTRY
+      \STATE \textbf{try:}
+      \STATE \quad \texttt{counter $\leftarrow$ counter + 1}
+      \STATE \quad \texttt{filename $\leftarrow$ format("screen\_\{counter:04d\}\_\{timestamp\}.png")}
+      \STATE \quad \texttt{filepath $\leftarrow$ join(screenshot\_dir, filename)}
+      \STATE \quad \texttt{device.screenshot(filepath)}
+      \STATE \quad \texttt{state.screenshot\_path $\leftarrow$ filepath}
+      \STATE \textbf{except:}
+      \STATE \quad \textbf{print} "截图失败"
     \ENDIF
 
     \RETURN \texttt{state}
@@ -290,20 +269,20 @@
     \WHILE{\texttt{now() < deadline}}
       \STATE \texttt{new\_state $\leftarrow$ capture(screenshot=False)}
 
-      \STATE \COMMENT{多维度判断是否变化}
+      \STATE \textbf{// 多维度判断是否变化}
       \STATE \texttt{package\_changed $\leftarrow$ (new\_state.current\_package $\neq$ old\_state.current\_package)}
       \STATE \texttt{activity\_changed $\leftarrow$ (new\_state.current\_activity $\neq$ old\_state.current\_activity)}
       \STATE \texttt{xml\_changed $\leftarrow$ (new\_state.hierarchy\_xml $\neq$ old\_state.hierarchy\_xml)}
 
       \IF{\texttt{package\_changed $\vee$ activity\_changed $\vee$ xml\_changed}}
-        \STATE \COMMENT{变化了，重新带截图采集一次后返回}
+        \STATE \textbf{// 变化了，重新带截图采集一次后返回}
         \RETURN \texttt{capture(screenshot=True)}
       \ENDIF
 
       \STATE \texttt{sleep(interval)}
     \ENDWHILE
 
-    \STATE \PRINT "等待屏幕变化超时"
+    \STATE \textbf{print} "等待屏幕变化超时"
     \RETURN \texttt{None}
   \end{algorithmic}
 \end{algorithm}
@@ -346,15 +325,16 @@
 \begin{verbatim}
 def truncate_xml(xml, max_length=15000):
     if len(xml) <= max_length:
-        return xml                    # 未超长，直接返回
+        return xml                    # Not too long, return directly
     
-    truncated = xml[:max_length]      # 先简单截断
+    truncated = xml[:max_length]      # Simple truncation first
     
     last_node_end = truncated.rfind("</node>")
     if last_node_end > max_length * 0.8:
-        truncated = truncated[:last_node_end + 7]   # 在完整节点处切断
+        truncated = truncated[:last_node_end + 7]   
+        # Cut at complete node
     
-    truncated += "\n<!-- XML 已截断，省略了部分子节点 -->"
+    truncated += "\n<!-- XML truncated, some nodes omitted -->"
     return truncated
 \end{verbatim}
 
@@ -996,26 +976,25 @@ GUI 智能体能够自主操作手机，这带来了一定的安全和伦理风�
 
 \subsection*{A.1 ScreenState 数据类}
 
-\texttt{ScreenState} 是感知层的核心数据结构，使用 Python dataclass 定义：
+\texttt{ScreenState} 是感知层的核心数据结构，使用 Python dataclass 定义，代码如下：
 
-\begin{lstlisting}[language=Python, caption={ScreenState 数据类定义}]
+\begin{verbatim}
 @dataclass
 class ScreenState:
-    """一次屏幕采样的完整状态。"""
-    hierarchy_xml: str = ""          # 完整控件树 XML
-    screenshot_path: Optional[str] = None  # 截图保存路径
-    timestamp: float = 0.0           # 采样时间戳
-    current_package: Optional[str] = None   # 当前前台App包名
-    current_activity: Optional[str] = None  # 当前Activity
+    hierarchy_xml: str = ""
+    screenshot_path: Optional[str] = None
+    timestamp: float = 0.0
+    current_package: Optional[str] = None
+    current_activity: Optional[str] = None
 
     @property
     def xml_size(self) -> int:
-        """控件树 XML 的字符长度"""
         return len(self.hierarchy_xml)
-\end{lstlisting}
+\end{verbatim}
 
-设计说明：
+\textbf{代码说明}：
 \begin{itemize}
+  \item 五个字段分别对应：控件树 XML、截图路径、时间戳、前台包名、前台 Activity
   \item 所有字段都有默认值，支持空状态构造
   \item \texttt{xml\_size} 是只读属性，提供便捷的规模查询
   \item 截图使用文件路径而非二进制数据，避免对象过大
@@ -1080,68 +1059,70 @@ class ScreenState:
 
 以下是网易云音乐搜索页部分控件树的真实 XML 片段，展示了控件树的实际结构和内容。
 
-\begin{lstlisting}[language=XML, caption={网易云音乐搜索页控件树片段（节选）}]
+\begin{verbatim}
 <?xml version="1.0" encoding="UTF-8"?>
 <hierarchy rotation="0">
-  <node index="0" text="" resource-id="" 
-        class="android.widget.FrameLayout" 
-        package="com.netease.cloudmusic" 
-        content-desc="" checkable="false" 
-        checked="false" clickable="false" 
-        enabled="true" focusable="false" 
-        focused="false" scrollable="false" 
-        long-clickable="false" password="false" 
+  <node index="0" text="" resource-id=""
+        class="android.widget.FrameLayout"
+        package="com.netease.cloudmusic"
+        content-desc="" checkable="false"
+        checked="false" clickable="false"
+        enabled="true" focusable="false"
+        focused="false" scrollable="false"
+        long-clickable="false" password="false"
         selected="false" bounds="[0,0][1080,1920]">
-    
-    <node index="0" text="" resource-id="" 
-          class="android.widget.LinearLayout" ...
+
+    <node index="0" text="" resource-id=""
+          class="android.widget.LinearLayout"
           bounds="[0,0][1080,1920]">
-      
-      <node index="0" text="" 
-            resource-id="android:id/statusBarBackground" 
-            class="android.widget.ViewStub" ...
+
+      <node index="0" text=""
+            resource-id="android:id/statusBarBackground"
+            class="android.widget.ViewStub"
             bounds="[0,0][1080,24]"/>
-      
+
       <node index="1" text="" ...>
-        <!-- 搜索框区域 -->
-        <node index="0" text="" 
+        <!-- Search bar region -->
+        <node index="0" text=""
               resource-id="com.netease.cloudmusic:id/search_bar"
-              class="android.widget.LinearLayout" 
-              content-desc="搜索" 
-              clickable="true" enabled="true" 
-              focusable="true" focused="false" 
-              scrollable="false" long-clickable="false" 
+              class="android.widget.LinearLayout"
+              content-desc="SouSuo"
+              clickable="true" enabled="true"
+              focusable="true" focused="false"
+              scrollable="false" long-clickable="false"
               bounds="[20,50][960,100]">
-          
-          <node index="0" text="搜索歌曲、歌手、专辑" 
+
+          <node index="0" text="SouSuoGeQuGeShouZhuanJi"
                 resource-id="com.netease.cloudmusic:id/search_hint"
-                class="android.widget.TextView" 
-                content-desc="" 
-                clickable="false" enabled="true" 
-                focusable="false" focused="false" 
+                class="android.widget.TextView"
+                content-desc=""
+                clickable="false" enabled="true"
+                focusable="false" focused="false"
                 bounds="[50,60][400,90]"/>
         </node>
-        
-        <!-- 推荐标签栏 -->
-        <node index="1" text="推荐" 
-              class="android.widget.TextView" 
-              clickable="true" 
+
+        <!-- Tag bar -->
+        <node index="1" text="TuiJian"
+              class="android.widget.TextView"
+              clickable="true"
               bounds="[50,160][120,190]"/>
-        <node index="2" text="热歌榜" 
-              class="android.widget.TextView" 
-              clickable="true" 
+        <node index="2" text="ReGeBang"
+              class="android.widget.TextView"
+              clickable="true"
               bounds="[150,160][250,190]"/>
-        <node index="3" text="新歌榜" 
-              class="android.widget.TextView" 
-              clickable="true" 
+        <node index="3" text="XinGeBang"
+              class="android.widget.TextView"
+              clickable="true"
               bounds="[270,160][370,190]"/>
-        
-        <!-- ...更多节点... -->
+
+        <!-- ... more nodes ... -->
       </node>
     </node>
   </node>
 </hierarchy>
-\end{lstlisting}
+\end{verbatim}
+
+\textbf{说明}：为避免 Unicode 排版问题，上述 XML 示例中 text 和 content-desc 属性的中文内容使用拼音示意。实际控件树中这些字段为真实的中文文本（如「搜索歌曲、歌手、专辑」「推荐」「热歌榜」等）。
 
 从这个示例可以看出控件树的特点：
 \begin{enumerate}[leftmargin=*]
@@ -1154,50 +1135,51 @@ class ScreenState:
 \section*{附录 C：Prompt 模板示例}
 \addcontentsline{toc}{section}{附录 C：Prompt 模板示例}
 
-以下是控件匹配（Widget Match）的 System Prompt 模板，展示了如何将感知层的控件树信息与 LLM 结合。
+以下是控件匹配（Widget Match）的 System Prompt 模板，展示了如何将感知层的控件树信息与 LLM 结合。Prompt 整体结构如表~\ref{tab:prompt_structure} 所示。
 
-\begin{lstlisting}[language=Python, caption={控件匹配 System Prompt 模板（节选）}]
-WIDGET_MATCH_SYSTEM = """你是一个安卓UI自动化专家。你需要根据用户的操作意图
-和当前安卓屏幕的控件树（XML格式），找出应该操作的控件并确定操作类型。
+\begin{table}[h]
+  \centering
+  \caption{控件匹配 System Prompt 结构}
+  \label{tab:prompt_structure}
+  \begin{tabular}{p{0.3\linewidth}p{0.62\linewidth}}
+    \toprule
+    模块 & 内容要点 \\
+    \midrule
+    角色定义 & 安卓 UI 自动化专家，根据操作意图和控件树找出目标控件 \\
+    \midrule
+    控件属性说明 & text（文本）、resource-id（资源ID，最稳定）、class（控件类型）、content-desc（无障碍描述）、bounds（坐标范围）、clickable（是否可点击）、scrollable（是否可滚动） \\
+    \midrule
+    选择优先级 & 1. resource-id 最稳定优先 \newline 2. text 文本其次 \newline 3. class + content-desc 组合再次 \newline 4. 绝对不要用 bounds 坐标作为主要选择器 \\
+    \midrule
+    操作类型判断 & 打开 App $\rightarrow$ 找图标 $\rightarrow$ click \newline 输入/填写 $\rightarrow$ 找 EditText $\rightarrow$ set\_text \newline 点击/选择/进入 $\rightarrow$ 找按钮 $\rightarrow$ click \newline 返回/退回 $\rightarrow$ press\_back \newline 回到桌面 $\rightarrow$ press\_home \newline 滑动 $\rightarrow$ swipe \newline 等待 $\rightarrow$ wait \newline 长按 $\rightarrow$ long\_press \newline \textbf{键盘搜索/回车/完成 $\rightarrow$ key\_event (66)} \\
+    \midrule
+    重要提醒 & 软键盘是独立窗口，控件树中看不到键盘按钮！若操作意图提到「键盘」且控件树中找不到对应控件，必须返回 key\_event 而不是 click \\
+    \midrule
+    输出格式 & 严格 JSON 格式，包含 action、target（text/resource\_id/class/content\_desc/bounds）、input\_text、swipe\_direction、wait\_time、key\_code、reasoning \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-控件树中每个节点包含以下属性：
-- text: 控件显示的文本内容
-- resource-id: 控件的资源ID（最稳定的选择器）
-- class: 控件类型（android.widget.TextView等）
-- content-desc: 无障碍描述
-- bounds: 控件在屏幕上的坐标范围 [x1, y1, x2, y2]
-- clickable: 是否可点击
-- scrollable: 是否可滚动
-...
+Prompt 的 JSON 输出格式定义如下：
 
-选择控件的优先级：
-1. resource-id 最稳定优先
-2. text 文本其次
-3. class + content-desc 组合再次
-4. 绝对不要用 bounds 坐标作为主要选择器
-
-操作类型判断规则：
-- 用户说「打开XXApp」→ 找桌面图标或Launcher中的App入口 → click
-- 用户说「输入/填写/键入XX」→ 找 EditText → set_text
-- 用户说「点击/选择/进入/播放/确认」→ 找对应按钮或条目 → click
-- 用户说「点击键盘上的搜索/回车/完成」→ key_event（key_code=66）
-  ⚠️ 重要：软键盘是独立窗口，控件树中看不到键盘按钮！
-...
-
-严格以如下 JSON 格式输出：
-{{
-  "action": "click|set_text|...|key_event",
-  "target": {{
+\begin{verbatim}
+{
+  "action": "click|set_text|scroll|long_press|
+             swipe|press_back|press_home|wait|key_event",
+  "target": {
     "text": "...",
     "resource_id": "...",
     "class": "...",
     "content_desc": "...",
     "bounds": [x1, y1, x2, y2]
-  }},
+  },
   "input_text": "...",
+  "swipe_direction": "up|down|left|right",
+  "wait_time": 0,
+  "key_code": 66,
   "reasoning": "..."
-}}"""
-\end{lstlisting}
+}
+\end{verbatim}
 
 Prompt 设计的要点：
 \begin{enumerate}[leftmargin=*]
@@ -1296,7 +1278,5 @@ DeepSeek-AI.
 \newblock \url{https://github.com/deepseek-ai/DeepSeek-LLM}, 2024.
 
 \end{thebibliography}
-
-\end{CJK*}
 
 \end{document}
