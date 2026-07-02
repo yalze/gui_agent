@@ -1,0 +1,1302 @@
+\documentclass{article}
+\usepackage[preprint]{neurips_2026}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{CJKutf8}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  frame=single,
+  breaklines=true,
+  numbers=left,
+  numberstyle=\tiny,
+  commentstyle=\color{gray},
+  keywordstyle=\color{blue},
+  stringstyle=\color{orange},
+}
+
+\title{面向移动端的 GUI 智能体系统：感知层设计与端到端实现}
+
+\author{
+  张耀之 \quad 殷龙飞 \quad 陈昊 \quad 姬凯宁 \quad 胡沛亮 \\
+  XX 大学 XX 学院 \\
+  \texttt{\{zhangyaozhi, yinlongfei, chenhao, jikaining, hupeiliang\}@xx.edu.cn}
+}
+
+\begin{document}
+\maketitle
+
+\begin{CJK*}{UTF8}{gbsn}
+
+\begin{abstract}
+本文设计并实现了一个面向移动端的 GUI 智能体系统，该系统能够接收用户的自然语言指令，在安卓设备上自主完成复杂的多步操作任务。系统采用五层架构：推理层、感知层、交互层、恢复层和状态层，各层职责清晰、松耦合协作。本文重点介绍作者（张耀之）负责的 GUI 感知层的设计与实现。感知层作为连接物理设备与智能决策的桥梁，负责将安卓屏幕的视觉信息转化为机器可理解的结构化数据，具体包括控件树 XML 采集、屏幕截图、前台应用识别以及页面变化检测等核心功能。针对移动 GUI 感知中的若干工程挑战，本文提出了一系列解决方案：包括基于多维度对比的页面变化检测机制、控件树截断策略以适配大语言模型上下文限制、软键盘感知盲区的补偿机制，以及鲁棒性设计以应对设备兼容性问题。在网易云音乐播放场景下的端到端测试表明，感知层能够稳定、准确地提供屏幕状态信息，支撑整个智能体系统完成四步连锁操作（打开应用、进入搜索、输入关键词、播放歌曲），验证了感知层设计的有效性和工程实用性。
+
+\textbf{关键词：} GUI 智能体；安卓自动化；屏幕感知；控件树；uiautomator2；大语言模型
+\end{abstract}
+
+\section{引言}
+\label{sec:introduction}
+
+随着移动设备的普及和移动应用生态的蓬勃发展，人们每天在手机上完成大量重复的 GUI 操作，如点外卖、订酒店、播放音乐等。如何让计算机理解手机屏幕上的内容，并自主完成用户指令，成为人机交互和人工智能领域的重要研究方向。GUI 智能体（GUI Agent）旨在构建一个能够像人类一样理解屏幕内容、操作应用程序的智能系统，通过自然语言接口实现人机交互的自然化和自动化。
+
+近年来，大语言模型（Large Language Model, LLM）的迅猛发展为 GUI 智能体带来了新的机遇。LLM 展现出强大的语义理解、推理规划和工具调用能力，使得「自然语言指令 → 任务规划 → 操作执行」这一链路成为可能。然而，将 LLM 的决策能力落地到真实的移动设备上，仍面临诸多挑战：首先是感知问题——如何将屏幕上的视觉内容转化为 LLM 可理解的结构化表示；其次是定位问题——如何在复杂的控件树中准确找到目标操作对象；第三是鲁棒性问题——不同设备、不同应用、不同版本的界面差异巨大，自动化框架的兼容性难以保证。
+
+现有的移动端 GUI 自动化方案主要分为两类：一类是基于坐标的录制回放工具，如 Auto.js、Appium 等，这类工具依赖固定坐标，应用界面稍有变化就会失效；另一类是基于控件树的测试框架，如 uiautomator2、Espresso 等，虽然能够通过属性定位控件，但需要人工编写测试脚本，无法理解自然语言指令。将 LLM 与控件树结合，实现端到端的自然语言驱动的 GUI 操作，是当前研究的前沿方向。
+
+本文设计并实现了一个完整的移动端 GUI 智能体系统，采用五层架构设计：第 1 层推理层负责任务理解与子任务分解；第 2 层感知层负责屏幕状态的采集与结构化表示；第 3 层交互层负责操作规划与执行；第 4 层恢复层负责异常处理与错误恢复；第 5 层状态层负责全局状态管理。
+
+本文的主要贡献如下：
+
+\begin{enumerate}[leftmargin=*]
+  \item 设计并实现了 GUI 感知层（ScreenCaptor），将安卓屏幕的多源信息（控件树 XML、截图、前台应用、Activity）统一封装为结构化的 \texttt{ScreenState} 数据模型，为上层决策提供一致的感知接口。
+  \item 提出了基于多维度对比的页面变化检测机制，通过同时比对包名、Activity 和控件树内容三个维度，实现高效、准确的页面跳转判断，支撑操作后验证和智能等待功能。
+  \item 设计了控件树截断策略，在保证语法有效性的前提下将超长 XML 截断至大语言模型可接受的长度，兼顾信息完整性和上下文限制。
+  \item 针对软键盘感知盲区问题，提出了键盘事件补偿机制，通过 ADB keyevent 绕过控件树不可见的限制，解决了搜索、回车等键盘操作的执行难题。
+  \item 在网易云音乐播放场景下完成了端到端测试验证，系统能够成功完成「打开 App → 搜索歌曲 → 播放音乐」的完整链路，验证了感知层及整个系统的有效性。
+\end{enumerate}
+
+本文的章节安排如下：第 2 节介绍相关工作；第 3 节概述系统整体架构；第 4 节详细阐述 GUI 感知层的设计与实现，这是本文的重点；第 5 节简要介绍 GUI 交互层的实现；第 6 节介绍推理层；第 7 节介绍异常恢复层；第 8 节给出实验与评估结果；第 9 节进行讨论；第 10 节总结全文。
+
+\section{相关工作}
+\label{sec:related_work}
+
+\subsection{GUI 自动化工具}
+
+移动端 GUI 自动化工具发展已久。早期的 Monkey~\cite{monkey} 通过随机事件注入进行压力测试，完全不具备语义理解能力。Appium~\cite{appium} 和 Espresso~\cite{espresso} 是主流的移动端测试框架，支持通过控件属性（如 resource-id、text、content-desc）定位元素并执行操作，但需要人工编写测试脚本，无法处理自然语言指令。uiautomator2~\cite{uiautomator2} 是基于谷歌 UiAutomator 的 Python 封装，提供了 \texttt{dump\_hierarchy()} 接口获取控件树 XML，是本系统感知层的底层技术基础。
+
+上述工具的共同局限是：它们是「执行器」而非「智能体」——知道怎么做，但不知道做什么。需要人工将操作步骤转化为代码，无法从自然语言指令自主规划和执行。
+
+\subsection{基于 LLM 的 GUI 智能体}
+
+随着大语言模型的发展，研究者开始探索将 LLM 应用于 GUI 操作。AppAgent~\cite{appagent} 提出了一种基于 LLM 的多模态智能手机代理，通过观察截图和操作界面来学习完成任务。SeeAct~\cite{seeact} 提出了视觉-语言-动作一体化的网页操作代理。CogAgent~\cite{cogagent} 结合了视觉理解和 GUI 操作能力。
+
+与本系统最接近的工作是 AppAgent，它同样使用 uiautomator2 获取控件树和截图，并通过 LLM 进行决策。然而，AppAgent 将感知、决策和执行混在一起，缺乏清晰的层次划分。本系统采用五层架构，各层职责清晰，特别是将感知层独立出来，形成统一的 \texttt{ScreenState} 数据模型，便于上层模块复用和替换底层感知技术。
+
+\subsection{屏幕感知与控件定位}
+
+屏幕感知是 GUI 智能体的基础能力。现有方法主要分为基于视觉（截图 + OCR / VLM）和基于结构化数据（控件树 XML）两大类。视觉方法通用性强，但定位精度有限且计算成本高；结构化方法定位精确且无需额外模型推理，但依赖系统级权限。本系统采用以控件树为主、截图为辅的混合感知方案，兼顾精确性和可调试性。
+
+控件定位是交互的核心。传统方法依赖固定的 resource-id 或 XPath，但应用版本迭代可能导致属性变化。基于 LLM 的语义匹配方法~\cite{llm_gui} 能够通过自然语言描述找到目标控件，具有更好的泛化能力。本系统的控件理解层（WidgetUnderstander）采用规则快速匹配 + LLM 语义匹配的双层策略，兼顾效率和准确性。
+
+\section{系统整体架构}
+\label{sec:system_overview}
+
+本节简要介绍系统的五层整体架构，帮助读者建立全局认知。各层的详细设计将在后续章节中展开，其中第 4 章的感知层是本文重点。
+
+\subsection{五层架构设计}
+
+系统采用自顶向下的五层架构，如图~\ref{fig:architecture} 所示（预留位置）。每一层专注于特定职责，通过清晰的接口与相邻层交互，实现高内聚低耦合的设计目标。
+
+\begin{figure}[h]
+  \centering
+  \fbox{
+    \begin{minipage}{0.8\linewidth}
+      \centering
+      \vspace{0.5cm}
+      \textbf{第 1 层：推理层（Agent Reasoner）}\\
+      任务理解 $\bullet$ 人在环路 $\bullet$ 子任务分解（DAG） $\bullet$ 增量学习\\
+      \vspace{0.3cm}
+      \hrule
+      \vspace{0.3cm}
+      \textbf{第 2 层：感知层（GUI Sensor）}\\
+      控件树采集 $\bullet$ 屏幕截图 $\bullet$ 前台应用识别 $\bullet$ 页面变化检测\\
+      \vspace{0.3cm}
+      \hrule
+      \vspace{0.3cm}
+      \textbf{第 3 层：交互层（GUI Actor）}\\
+      步骤拆解 $\bullet$ 控件理解 $\bullet$ 操作执行 $\bullet$ 三级降级\\
+      \vspace{0.3cm}
+      \hrule
+      \vspace{0.3cm}
+      \textbf{第 4 层：恢复层（Recovery Layer）}\\
+      异常分类 $\bullet$ 重试决策 $\bullet$ 回溯机制 $\bullet$ 用户干预\\
+      \vspace{0.3cm}
+      \hrule
+      \vspace{0.3cm}
+      \textbf{第 5 层：状态层（State Manager）}\\
+      任务状态 $\bullet$ GUI 状态 $\bullet$ 历史记录 $\bullet$ 持久化存储\\
+      \vspace{0.5cm}
+    \end{minipage}
+  }
+  \caption{系统五层架构示意图}
+  \label{fig:architecture}
+\end{figure}
+
+各层职责概述如下：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{推理层（第 1 层）}：接收用户的自然语言指令，通过 Skill 领域识别、人在环路（HITL）信息补全、子任务分解（DAG）三个步骤，将模糊的高层指令转化为结构化的可执行任务树。该层由殷龙飞负责。
+  \item \textbf{感知层（第 2 层）}：采集安卓屏幕的多源信息（控件树 XML、截图、前台包名、Activity），统一封装为结构化的屏幕状态。同时提供页面变化检测、App 名称映射等辅助功能。该层由张耀之（本文作者）负责，是本文的重点内容。
+  \item \textbf{交互层（第 3 层）}：接收推理层的任务树，在感知层提供的屏幕状态基础上，完成步骤拆解、控件语义匹配、操作执行和结果验证。该层由陈昊负责，作者参与了部分设计讨论。
+  \item \textbf{恢复层（第 4 层）}：负责异常检测和错误恢复。当执行失败时，判断错误类型，决定是重试、回溯还是请求人工干预。该层由姬凯宁负责。
+  \item \textbf{状态层（第 5 层）}：维护全局状态，包括任务进度、屏幕历史、操作日志等，为各层提供状态查询和持久化服务。该层由胡沛亮负责。
+\end{enumerate}
+
+\subsection{数据流向}
+
+系统运行时的数据流向如下：用户输入自然语言指令 → 推理层生成 DAG 任务树 → 交互层按拓扑序调度任务 → 每次操作前调用感知层采集屏幕状态 → 交互层根据感知结果执行操作 → 操作后再次调用感知层验证效果 → 恢复层处理异常 → 状态层记录全程数据。
+
+感知层在整个数据流中处于关键位置：它是连接「物理设备」与「智能决策」的桥梁。没有准确、及时的屏幕感知，上层的决策和执行就成了无源之水、无本之木。感知层的稳定性和准确性直接决定了整个系统的上限。
+
+\section{GUI 感知层设计与实现}
+\label{sec:sensor_layer}
+
+本章详细介绍作者（张耀之）负责的 GUI 感知层的设计与实现。感知层的核心目标是：将安卓设备屏幕上的物理信息，转化为上层模块（交互层、恢复层）可直接消费的结构化数据，并提供页面变化检测等关键辅助能力。
+
+\subsection{设计原则与目标}
+
+感知层的设计遵循以下原则：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{统一接口}：无论底层使用何种自动化框架（uiautomator2、Appium、ADB 等），向上层提供一致的 \texttt{ScreenState} 数据模型，屏蔽底层差异。
+  \item \textbf{多源融合}：同时采集控件树、截图、包名、Activity 等多维度信息，为上层决策提供丰富的感知输入。
+  \item \textbf{鲁棒性优先}：移动设备环境复杂多变（应用闪退、权限变化、网络延迟等），感知层必须具备容错能力，单点失败不应导致整个系统崩溃。
+  \item \textbf{可调试性}：每次感知都保存截图和控件树，便于问题定位和事后复盘。
+  \item \textbf{高性能}：感知操作应尽可能快，避免成为系统瓶颈。单次完整感知（控件树 + 截图）应控制在 2 秒以内。
+\end{enumerate}
+
+感知层的功能目标可概括为「一态三用」：一个统一的屏幕状态（\texttt{ScreenState}），服务于三种用途——操作前的控件理解、操作后的结果验证、以及执行过程中的智能等待。
+
+\subsection{屏幕状态数据模型}
+
+感知层的核心数据结构是 \texttt{ScreenState}，它封装了一次屏幕采样的完整信息。其字段定义如表~\ref{tab:screen_state} 所示。
+
+\begin{table}[h]
+  \centering
+  \caption{\texttt{ScreenState} 数据模型字段定义}
+  \label{tab:screen_state}
+  \begin{tabular}{p{0.22\linewidth}p{0.15\linewidth}p{0.55\linewidth}}
+    \toprule
+    字段名 & 类型 & 说明 \\
+    \midrule
+    \texttt{hierarchy\_xml} & \texttt{str} & 完整控件树 XML 字符串，包含所有可见控件的属性（text、resource-id、class、bounds、clickable 等）\\
+    \texttt{screenshot\_path} & \texttt{str / None} & 截图保存的文件路径（可选，不截图时为 None）\\
+    \texttt{timestamp} & \texttt{float} & 采样时间戳（Unix 时间，秒级精度），用于时序比较和性能分析 \\
+    \texttt{current\_package} & \texttt{str / None} & 当前前台应用的包名，如 \texttt{com.netease.cloudmusic} \\
+    \texttt{current\_activity} & \texttt{str / None} & 当前 Activity 名称，如 \texttt{.activity.MainActivity} \\
+    \midrule
+    \texttt{xml\_size}（属性） & \texttt{int} & 控件树 XML 的字符长度（只读属性，方便快速估算规模）\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+选择这些字段的考量如下：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{hierarchy\_xml}是感知的核心产物。它包含了屏幕上所有控件的完整属性，是 LLM 进行控件语义匹配的基础。XML 格式虽然冗长，但信息完整、结构清晰，便于 LLM 理解和解析。
+  \item \textbf{screenshot\_path} 保存截图文件路径而非图片二进制数据，是为了避免 \texttt{ScreenState} 对象过大。截图主要用于调试和日志展示，决策主路径不依赖截图内容。
+  \item \textbf{timestamp} 记录采样时刻，支持多种时间相关的分析：如页面加载耗时、操作响应时间、两次感知的间隔等。
+  \item \textbf{current\_package} 和 \textbf{current\_activity} 是页面身份的「指纹」。包名变化意味着切换了应用，Activity 变化意味着切换了页面，这是判断操作是否生效的重要依据。
+\end{enumerate}
+
+在实现上，\texttt{ScreenState} 使用 Python 的 dataclass 定义，简洁易读。同时提供了 \texttt{xml\_size} 只读属性，方便上层快速判断控件树规模。
+
+\subsection{ScreenCaptor 核心实现}
+
+感知层的功能主体是 \texttt{ScreenCaptor} 类，它封装了 uiautomator2 的底层能力，向外提供两个核心接口：\texttt{capture()} 用于单次采集，\texttt{wait\_for\_change()} 用于等待页面变化。
+
+\subsubsection{\texttt{capture()} 方法}
+
+\texttt{capture()} 是感知层最基本的接口，一次调用返回当前屏幕的完整 \texttt{ScreenState}。其执行流程如算法~\ref{alg:capture} 所示。
+
+\begin{algorithm}[h]
+  \caption{\texttt{ScreenCaptor.capture()} 算法}
+  \label{alg:capture}
+  \begin{algorithmic}[1]
+    \REQUIRE \texttt{screenshot}: 是否截图（布尔值，默认 True）
+    \ENSURE \texttt{ScreenState} 对象
+
+    \STATE \texttt{state $\leftarrow$ ScreenState(timestamp=now())}
+    \STATE \COMMENT{Step 1: 获取控件树}
+    \TRY
+      \STATE \texttt{state.hierarchy\_xml $\leftarrow$ device.dump\_hierarchy()}
+    \CATCH
+      \STATE \texttt{state.hierarchy\_xml $\leftarrow$ "<error>获取控件树失败</error>"}
+    \ENDTRY
+
+    \STATE \COMMENT{Step 2: 获取当前 App 信息}
+    \TRY
+      \STATE \texttt{info $\leftarrow$ device.info}
+      \STATE \texttt{state.current\_package $\leftarrow$ info.currentPackageName}
+      \STATE \texttt{state.current\_activity $\leftarrow$ info.currentActivity}
+    \CATCH
+      \STATE \COMMENT{获取失败则字段保持为 None，不影响主流程}
+    \ENDTRY
+
+    \STATE \COMMENT{Step 3: 截图（可选）}
+    \IF{\texttt{screenshot = True}}
+      \TRY
+        \STATE \texttt{counter $\leftarrow$ counter + 1}
+        \STATE \texttt{filename $\leftarrow$ format("screen\_\{counter:04d\}\_\{timestamp\}.png")}
+        \STATE \texttt{filepath $\leftarrow$ join(screenshot\_dir, filename)}
+        \STATE \texttt{device.screenshot(filepath)}
+        \STATE \texttt{state.screenshot\_path $\leftarrow$ filepath}
+      \CATCH
+        \STATE \PRINT "截图失败"
+      \ENDTRY
+    \ENDIF
+
+    \RETURN \texttt{state}
+  \end{algorithmic}
+\end{algorithm}
+
+设计要点说明：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{分步容错}：三个感知步骤（控件树、App 信息、截图）是独立的 try-catch 块，任何一步失败都不会影响其他步骤的结果。例如截图失败了，控件树和 App 信息仍然可用，系统可以继续运行。这体现了鲁棒性优先的设计原则。
+  \item \textbf{错误标记}：控件树获取失败时，不是返回空字符串，而是返回一个带有错误信息的 XML 标签。这样上层模块如果尝试解析 XML 时发现包含 \texttt{<error>} 节点，可以明确知道是感知失败而非空屏幕。
+  \item \textbf{截图命名}：截图文件名包含递增序号和时间戳，既便于按顺序查看操作序列，又便于精确定位到具体时刻。
+  \item \textbf{目录管理}：截图目录在初始化时通过 \texttt{os.makedirs(..., exist\_ok=True)} 自动创建，避免了首次运行时的目录不存在错误。
+\end{enumerate}
+
+\subsubsection{\texttt{wait\_for\_change()} 方法}
+
+\texttt{wait\_for\_change()} 是感知层的高级接口，用于等待屏幕发生变化。在 GUI 操作中，点击一个按钮后页面不会立即跳转，需要等待加载完成。如果使用固定时间等待，要么浪费时间（等得太久），要么操作失败（等得不够）。智能等待机制通过轮询检测页面变化，一旦检测到变化就立即返回，兼顾效率和可靠性。
+
+页面变化的检测是多维度的，如算法~\ref{alg:wait_for_change} 所示。
+
+\begin{algorithm}[h]
+  \caption{\texttt{ScreenCaptor.wait\_for\_change()} 算法}
+  \label{alg:wait_for_change}
+  \begin{algorithmic}[1]
+    \REQUIRE \texttt{timeout}: 最大等待时间（秒，默认 10.0）
+    \REQUIRE \texttt{interval}: 检查间隔（秒，默认 0.5）
+    \REQUIRE \texttt{old\_state}: 基准状态（None 则以当前状态为基准）
+    \ENSURE 变化后的 \texttt{ScreenState}，超时返回 None
+
+    \IF{\texttt{old\_state = None}}
+      \STATE \texttt{old\_state $\leftarrow$ capture(screenshot=False)}
+    \ENDIF
+
+    \STATE \texttt{deadline $\leftarrow$ now() + timeout}
+
+    \WHILE{\texttt{now() < deadline}}
+      \STATE \texttt{new\_state $\leftarrow$ capture(screenshot=False)}
+
+      \STATE \COMMENT{多维度判断是否变化}
+      \STATE \texttt{package\_changed $\leftarrow$ (new\_state.current\_package $\neq$ old\_state.current\_package)}
+      \STATE \texttt{activity\_changed $\leftarrow$ (new\_state.current\_activity $\neq$ old\_state.current\_activity)}
+      \STATE \texttt{xml\_changed $\leftarrow$ (new\_state.hierarchy\_xml $\neq$ old\_state.hierarchy\_xml)}
+
+      \IF{\texttt{package\_changed $\vee$ activity\_changed $\vee$ xml\_changed}}
+        \STATE \COMMENT{变化了，重新带截图采集一次后返回}
+        \RETURN \texttt{capture(screenshot=True)}
+      \ENDIF
+
+      \STATE \texttt{sleep(interval)}
+    \ENDWHILE
+
+    \STATE \PRINT "等待屏幕变化超时"
+    \RETURN \texttt{None}
+  \end{algorithmic}
+\end{algorithm}
+
+变化检测的三个维度各有其适用场景：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{包名变化}（最剧烈）：表示从一个 App 切换到了另一个 App，例如从桌面点击图标打开应用。这是最强的变化信号。
+  \item \textbf{Activity 变化}（中等强度）：表示在同一 App 内切换了页面，例如从首页跳转到搜索页。这是最常见的页面跳转信号。
+  \item \textbf{控件树变化}（最灵敏）：即使 Activity 没变，只要页面内容变了（如列表刷新、弹窗出现、输入文本后控件内容变化），控件树 XML 就会不同。这是最灵敏的检测维度，能够捕捉细微的界面更新。
+\end{enumerate}
+
+使用三个维度的「或」逻辑而非单一维度，是为了覆盖各种场景：
+
+\begin{itemize}
+  \item 只用包名：会漏掉 App 内部的页面跳转
+  \item 只用 Activity：会漏掉同页面的内容刷新（如搜索结果加载）
+  \item 只用控件树：虽然最灵敏，但可能因为动画帧、时间戳显示等微小变化产生误报
+\end{itemize}
+
+虽然理论上控件树变化包含了包名和 Activity 变化（因为包名/Activity 变了控件树肯定也变），但显式检查包名和 Activity 有两个好处：一是语义更清晰，日志中可以明确记录「页面已切换到 XX App」；二是在极端情况下（如控件树获取失败但包名变化了）仍能检测到变化。
+
+关于性能：轮询间隔设为 0.5 秒，在 10 秒超时内最多轮询 20 次。每次轮询只抓控件树和 App 信息（不截图），开销很小。实际测试中，页面跳转通常在 2-3 秒内检测到变化，远早于超时。
+
+\subsection{控件树截断策略}
+
+控件树 XML 可能非常长——复杂页面可能包含数百个节点，XML 字符数可达数万甚至数十万。如果将完整 XML 直接传入 LLM，可能超出模型的上下文窗口限制，导致请求失败。
+
+为此，感知层与控件理解层配合，实现了控件树截断策略。截断逻辑位于 \texttt{WidgetUnderstander.\_truncate\_xml()} 方法中，其设计考虑了以下因素：
+
+\begin{enumerate}[leftmargin*]
+  \item \textbf{截断长度}：默认最大长度为 15000 字符。这个值是在信息完整性和上下文限制之间的平衡——DeepSeek-Chat 的上下文窗口为 32K tokens，15000 字符的 XML 约占 5000-8000 tokens，剩余空间用于 prompt 和输出。
+  \item \textbf{截断位置}：从头部开始截断，保留前面的节点。这是因为安卓控件树是深度优先遍历的，前面的节点通常更靠近根节点、更重要（如顶部导航栏、搜索框等）。
+  \item \textbf{语法有效性}：截断后不是直接返回，而是尝试在最后一个完整的 \texttt{</node>} 标签处切断，确保截断后的 XML 仍然是语法有效的（不会在标签中间断开）。同时追加注释 \texttt{<!-- XML 已截断，省略了部分子节点 -->}，让 LLM 知道这不是完整内容。
+  \item \textbf{智能阈值}：只有当最后一个完整节点的位置超过最大长度的 80\% 时，才在该节点处截断。否则直接截断（因为太短的截断没有意义）。
+\end{enumerate}
+
+截断策略的伪代码如下：
+
+\begin{verbatim}
+def truncate_xml(xml, max_length=15000):
+    if len(xml) <= max_length:
+        return xml                    # 未超长，直接返回
+    
+    truncated = xml[:max_length]      # 先简单截断
+    
+    last_node_end = truncated.rfind("</node>")
+    if last_node_end > max_length * 0.8:
+        truncated = truncated[:last_node_end + 7]   # 在完整节点处切断
+    
+    truncated += "\n<!-- XML 已截断，省略了部分子节点 -->"
+    return truncated
+\end{verbatim}
+
+需要指出的是，截断策略本质上是信息有损的——被截断部分的控件对 LLM 来说是不可见的。这在某些场景下可能导致目标控件不在可见范围内。针对这个问题，系统有两个补偿机制：一是操作后验证，如果第一次没找到正确控件，重新抓屏时滚动页面后目标控件可能出现在前面；二是滚动操作本身可以由 LLM 主动发起。
+
+\subsection{App 名称映射}
+
+感知层还提供了一个实用功能：\texttt{get\_current\_app\_name()}，将包名（如 \texttt{com.netease.cloudmusic}）转换为人类可读的中文名称（如「网易云音乐」）。
+
+这个功能的价值体现在两个方面：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{日志可读性}：控制台输出和执行报告中显示「当前 App：网易云音乐」比显示「com.netease.cloudmusic」直观得多，便于开发者和用户理解当前状态。
+  \item \textbf{LLM 上下文}：将 App 名称而非包名传递给 LLM 作为上下文，可以帮助模型更好地理解当前场景。例如知道当前是「美团外卖」，模型会更容易定位「提交订单」按钮。
+\end{enumerate}
+
+当前实现中，映射表维护了 12 个常见 App 的包名到中文名的映射，包括微信、钉钉、微博、爱奇艺、网易云音乐、QQ 音乐、酷狗音乐、美团外卖、美团、饿了么、携程旅行等。未命中映射的包名直接返回原包名字符串。
+
+随着支持的 App 增多，这个映射表可以持续扩展。未来也可以考虑通过查询系统应用列表来自动获取 App 名称，但考虑到不同 ROM 的实现差异，维护一个显式映射表是更可靠的方案。
+
+\subsection{软键盘感知盲区与补偿机制}
+
+在 GUI 感知的实践中，我们发现了一个重要的局限性：\textbf{软键盘是感知盲区}。具体来说，安卓系统的输入法（IME）运行在独立的进程和窗口中，\texttt{uiautomator2.dump\_hierarchy()} 获取的是当前 Activity 的控件树，不包含软键盘内部的按钮控件。
+
+这导致了一个典型的失败场景：用户指令是「点击键盘上的搜索按钮」，但感知层提供的控件树中根本没有「搜索」按钮——LLM 在 XML 中找不到目标控件，要么返回空目标，要么瞎猜一个坐标，最终导致操作失败。
+
+针对这个问题，我们设计了三层补偿机制：
+
+\subsubsection{第一层：快速短路检测}
+
+在控件理解层的 \texttt{\_quick\_match()} 方法中，使用正则表达式检测操作意图中是否包含「键盘搜索/回车/完成/下一步」等关键词。如果命中，直接返回 \texttt{KEY\_EVENT} 类型的操作（键码 66，对应回车键/搜索键），完全绕过控件匹配流程。
+
+匹配的正则模式包括：
+- \texttt{键盘.*?(?:搜索|回车|完成|下一步|enter|go|search)}
+- \texttt{(?:点击|按|敲).*(?:键盘上的)?(?:搜索|回车|完成|下一步)}
+- \texttt{(?:搜索|回车|完成)键}
+- \texttt{软键盘.*?按钮}
+
+这一层拦截了大多数明确的键盘操作场景，效率最高（无需调用 LLM）。
+
+\subsubsection{第二层：LLM 结果后处理}
+
+有些情况下，操作意图没有明确提到「键盘」，但 LLM 的推理过程中提到了键盘（例如 LLM 自己推断出目标控件在键盘上），或者目标控件的特征匹配键盘按钮。对于这种情况，后处理逻辑会检测 LLM 返回结果的 \texttt{reasoning} 字段和目标控件的 \texttt{class\_name} 字段，如果发现键盘相关关键词，自动将操作类型从 \texttt{CLICK} 改为 \texttt{KEY\_EVENT}。
+
+这一层是兜底性质的，能够捕获第一层漏掉的边界情况。
+
+\subsubsection{第三层：ADB keyevent 执行}
+
+\texttt{KEY\_EVENT} 操作最终通过 ADB 命令执行。执行器先尝试 uiautomator2 的 \texttt{device.press("enter")} 接口，如果失败则降级为直接调用 \texttt{adb shell input keyevent 66}。两种方式都不依赖控件树，直接通过系统级按键事件触发搜索/回车。
+
+键码 66（\texttt{KEYCODE\_ENTER}）在安卓系统中具有多重含义：在普通文本框中是回车换行，在搜索框中是触发搜索，在表单中是「下一步」或「完成」。安卓系统会根据当前输入框的 \texttt{imeOptions} 属性决定回车键的行为，因此使用键码 66 能够正确触发各种输入场景下的确认操作。
+
+软键盘感知盲区问题是 GUI 自动化中的经典难题。我们的三层补偿机制从「预防（快速短路）→ 纠正（后处理）→ 执行（ADB 兜底）」三个层面系统地解决了这个问题，是感知层与交互层协作的典型案例。
+
+\subsection{控件树结构深度解析}
+
+控件树 XML 是感知层提供的最核心数据。理解其结构和特性，对于正确使用感知信息至关重要。本节深入解析控件树的内部结构。
+
+\subsubsection{XML 结构与节点属性}
+
+控件树的根节点是 \texttt{<hierarchy>}，包含一个 \texttt{rotation} 属性表示屏幕旋转角度（0/90/180/270）。其子节点构成完整的控件树，每个 \texttt{<node>} 标签对应一个 Android View 控件。
+
+一个典型的节点包含以下属性：
+
+\begin{table}[h]
+  \centering
+  \caption{控件节点属性详解}
+  \label{tab:node_attributes}
+  \begin{tabular}{p{0.18\linewidth}p{0.12\linewidth}p{0.62\linewidth}}
+    \toprule
+    属性名 & 类型 & 说明 \\
+    \midrule
+    \texttt{index} & int & 在父节点中的子节点索引（从0开始）\\
+    \texttt{text} & string & 控件显示的文本内容。TextView、Button 等控件的主要可见内容 \\
+    \texttt{resource-id} & string & 控件的资源 ID，格式为 \texttt{<包名>:id/<名称>}。最稳定的定位属性 \\
+    \texttt{class} & string & 控件的 Java 类名，如 \texttt{android.widget.TextView} \\
+    \texttt{package} & string & 所属应用的包名 \\
+    \texttt{content-desc} & string & 无障碍描述（contentDescription），为视障用户提供的描述信息 \\
+    \texttt{bounds} & string & 控件在屏幕上的矩形区域，格式 \texttt{[x1,y1][x2,y2]} \\
+    \midrule
+    \texttt{checkable} & boolean & 是否可勾选（如 CheckBox）\\
+    \texttt{checked} & boolean & 是否已勾选 \\
+    \texttt{clickable} & boolean & 是否可点击（关键属性，决定控件是否可交互）\\
+    \texttt{enabled} & boolean & 是否启用（禁用的控件通常显示为灰色）\\
+    \texttt{focusable} & boolean & 是否可获得焦点 \\
+    \texttt{focused} & boolean & 当前是否拥有焦点 \\
+    \texttt{scrollable} & boolean & 是否可滚动（如 ListView、ScrollView）\\
+    \texttt{long-clickable} & boolean & 是否可长按 \\
+    \texttt{password} & boolean & 是否是密码输入框 \\
+    \texttt{selected} & boolean & 是否被选中 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+这些属性中，对于 GUI 智能体最重要的是：\texttt{resource-id}（最稳定的定位依据）、\texttt{text}（语义最明确）、\texttt{content-desc}（无障碍描述，常用于图标按钮）、\texttt{class}（控件类型）、\texttt{clickable}（判断是否可交互）、\texttt{bounds}（坐标位置，用于降级点击）。
+
+\subsubsection{典型控件类型}
+
+安卓系统中常见的控件类型及其对应的 class 值如表~\ref{tab:widget_types} 所示。
+
+\begin{table}[h]
+  \centering
+  \caption{常见控件类型}
+  \label{tab:widget_types}
+  \begin{tabular}{p{0.4\linewidth}p{0.52\linewidth}}
+    \toprule
+    class 值 & 控件说明 \\
+    \midrule
+    \texttt{android.widget.TextView} & 纯文本显示，最常见的控件类型 \\
+    \texttt{android.widget.EditText} & 文本输入框，可输入文字 \\
+    \texttt{android.widget.Button} & 按钮，通常可点击 \\
+    \texttt{android.widget.ImageView} & 图片显示，可能可点击（如图标按钮）\\
+    \texttt{android.widget.ImageButton} & 图片按钮 \\
+    \texttt{android.widget.ListView} & 列表视图，可滚动 \\
+    \texttt{android.widget.ScrollView} & 滚动视图容器 \\
+    \texttt{android.widget.RecyclerView} & 高效列表容器（现代App常用）\\
+    \texttt{android.widget.LinearLayout} & 线性布局容器（不可点击）\\
+    \texttt{android.widget.FrameLayout} & 帧布局容器 \\
+    \texttt{android.widget.RelativeLayout} & 相对布局容器 \\
+    \texttt{androidx.constraintlayout.widget.ConstraintLayout} & 约束布局容器 \\
+    \texttt{android.widget.CheckBox} & 复选框 \\
+    \texttt{android.widget.RadioButton} & 单选按钮 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+LLM 在匹配控件时，会根据操作意图和控件类型的对应关系进行判断。例如「输入XX」通常对应 \texttt{EditText}，「点击按钮」通常对应 \texttt{Button} 或 \texttt{clickable="true"} 的其他控件。
+
+\subsubsection{控件树的深度与广度}
+
+不同应用的控件树复杂度差异很大。以我们测试的场景为例：
+
+\begin{itemize}
+  \item \textbf{桌面（Launcher）}：约 50-100 个节点，深度 5-8 层
+  \item \textbf{网易云音乐首页}：约 200-300 个节点，深度 8-12 层
+  \item \textbf{搜索结果页}：约 150-250 个节点，深度 8-10 层
+  \item \textbf{歌曲播放页}：约 100-200 个节点，深度 7-10 层
+\end{itemize}
+
+复杂的电商首页、信息流页面可能有 500+ 个节点。控件树的规模直接影响 LLM 的处理时间和 token 消耗，这也是为什么需要截断策略的原因。
+
+\subsubsection{bounds 坐标系统}
+
+控件的 \texttt{bounds} 属性使用屏幕像素坐标系统，原点 (0, 0) 在屏幕左上角，x 轴向右增加，y 轴向下增加。格式为 \texttt{[x1,y1][x2,y2]}，其中 (x1, y1) 是左上角坐标，(x2, y2) 是右下角坐标。
+
+坐标的几个关键计算：
+
+\begin{align}
+  \text{宽度} &= x2 - x1 \\
+  \text{高度} &= y2 - y1 \\
+  \text{中心横坐标} &= \frac{x1 + x2}{2} \\
+  \text{中心纵坐标} &= \frac{y1 + y2}{2}
+\end{align}
+
+中心点坐标是坐标降级点击时使用的目标位置。实践表明，点击控件中心区域的成功率最高。
+
+需要注意的是，bounds 坐标是像素值，与屏幕密度（dpi）有关。同一控件在不同分辨率的设备上 bounds 值不同。因此 bounds 只能作为临时降级手段，不能作为稳定的定位依据。
+
+\subsection{感知层的鲁棒性设计}
+
+移动设备环境复杂，感知层必须在各种异常情况下保持稳定。以下从三个方面介绍鲁棒性设计。
+
+\subsubsection{异常隔离}
+
+如 \texttt{capture()} 算法所示，控件树、App 信息、截图三个采集步骤各自独立容错。任何一个步骤失败，其余步骤的结果仍然有效。特别是：
+
+\begin{itemize}
+  \item 截图失败不影响控件树的使用
+  \item 控件树获取失败时，仍然可以通过包名和 Activity 变化检测页面跳转
+  \item App 信息获取失败时（如设备临时无响应），控件树和截图仍然可用
+\end{itemize}
+
+这种「部分可用」的设计哲学比「全有或全无」更适合复杂的移动环境。
+
+\subsubsection{与设备兼容性相关的考虑}
+
+不同设备、不同安卓版本、不同 ROM 的 uiautomator2 表现可能有差异。感知层在设计时考虑了以下兼容性问题：
+
+\begin{enumerate}[leftmargin=*]
+  \item \texttt{dump\_hierarchy()} 返回的 XML 格式在不同设备上基本一致，是兼容性最好的接口。
+  \item \texttt{device.info} 返回的字段名在不同版本的 uiautomator2 中可能有差异（如 \texttt{currentPackageName} vs \texttt{packageName}），代码中使用 \texttt{.get()} 方式取值，字段不存在时返回 None。
+  \item 截图功能在少数设备上可能因权限问题失败，此时降级为不截图，不影响主流程。
+\end{enumerate}
+
+\subsubsection{性能考虑}
+
+感知操作的耗时直接影响整个系统的响应速度。单次 \texttt{capture()} 的耗时组成如下（在雷电模拟器上测试）：
+
+\begin{itemize}
+  \item \texttt{dump\_hierarchy()}: 约 100-300 ms
+  \item \texttt{device.info}: 约 20-50 ms
+  \item 截图: 约 200-500 ms
+\end{itemize}
+
+合计单次完整感知（含截图）约 300-800ms，不含截图约 100-300ms。这个速度对于 GUI 操作来说是完全可接受的——人类手动操作的反应时间约为 200-300ms，系统感知速度已经接近甚至超过人类。
+
+为了进一步优化性能，\texttt{wait\_for\_change()} 的轮询循环中不执行截图（\texttt{screenshot=False}），只有检测到变化后才截图一次，减少了不必要的 I/O 开销。
+
+\subsection{感知层与交互层的协作}
+
+感知层不是孤立工作的，它与交互层紧密协作，形成「感知-决策-执行-验证」的闭环。具体协作模式如下：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{操作前感知}：每次执行操作前，交互层调用 \texttt{capture()} 获取当前屏幕状态，作为 LLM 控件匹配的输入。
+  \item \textbf{操作后验证}：执行点击或输入操作后，交互层再次调用 \texttt{capture()} 获取新的屏幕状态，与操作前对比，判断操作是否真的生效。这是防止「假成功」的关键机制。
+  \item \textbf{智能等待}：点击操作后，交互层调用 \texttt{wait\_for\_change()} 等待页面跳转，页面变化后立即继续下一步，避免固定等待时间的浪费。
+\end{enumerate}
+
+操作后验证是感知层价值的重要体现。在 GUI 自动化中，「API 调用没报错」不等于「操作成功了」——坐标点击可能点偏了，文本输入可能因为没聚焦而无效，按钮可能实际上是不可点击的。只有通过感知层重新验证屏幕状态，才能确认操作的真实效果。
+
+这种「感知-执行-验证」的闭环设计，是系统可靠性的重要保障。
+
+\section{GUI 交互层实现}
+\label{sec:interaction_layer}
+
+交互层负责将推理层的任务树转化为设备上的实际操作。该层主要由陈昊同学实现，作者参与了感知层与交互层接口的设计讨论。本节简要介绍交互层的实现，帮助读者理解感知层在其中的作用。
+
+\subsection{整体结构}
+
+交互层的实现文件位于 \texttt{execution\_agent} 目录下，如表~\ref{tab:interaction_files} 所示。
+
+\begin{table}[h]
+  \centering
+  \caption{GUI 交互层主要实现文件}
+  \label{tab:interaction_files}
+  \begin{tabular}{p{0.3\linewidth}p{0.62\linewidth}}
+    \toprule
+    文件 & 主要作用 \\
+    \midrule
+    \texttt{app\_agent.py} & 主控制器，负责 DAG 调度、步骤执行、重试、验证和报告生成 \\
+    \texttt{models.py} & 定义 \texttt{Action}、\texttt{Step}、\texttt{WidgetTarget}、\texttt{ExecutionResult} 等数据结构 \\
+    \texttt{step\_parser.py} & 将任务描述拆分为原子步骤，并用正则规则提取候选动作 \\
+    \texttt{widget\_understander.py} & 调用大语言模型，根据操作意图和控件树 XML 匹配目标控件 \\
+    \texttt{action\_executor.py} & 将结构化动作翻译为 uiautomator2/ADB 操作，提供重试与降级策略 \\
+    \texttt{screen\_state.py} & GUI 感知层实现（作者负责），采集屏幕状态供交互层使用 \\
+    \texttt{prompts.py} & 3 套 Prompt 模板：步骤拆解、控件匹配、操作结果验证 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+交互层的入口是 \texttt{AppAgent} 类，它持有设备对象、模型客户端以及感知层、解析器、理解器、执行器等子模块。执行流程为：DAG 调度 → 任务拆解 → 逐步执行（感知→匹配→执行→验证）。
+
+\subsection{控件理解层}
+
+控件理解层（WidgetUnderstander）是交互层的核心模块，负责将自然语言操作意图映射到控件树中的具体节点。它采用双层匹配策略：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{快速短路层}：对于返回键、Home 键、等待、键盘事件等不需要控件定位的操作，直接用正则规则匹配并返回，无需调用 LLM。这部分在第 4.6 节已有详细介绍。
+  \item \textbf{LLM 匹配层}：需要在控件树中寻找目标的操作（点击、输入、长按等），将步骤意图、原始描述、当前应用和 XML 控件树交给 LLM，由模型返回匹配的目标控件和操作类型。
+\end{enumerate}
+
+LLM 匹配层使用的 Prompt 中明确规定了选择控件的优先级：resource-id 最稳定优先，text 文本其次，class + content-desc 组合再次，绝对不要用 bounds 作为主要选择器。这与感知层提供的控件树属性完全对应。
+
+\subsection{三级降级机制}
+
+交互层的执行器（ActionExecutor）实现了三级降级机制，应对 uiautomator2 在不同设备上的兼容性问题：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{第一级：选择器操作}：优先使用 \texttt{WidgetTarget.to\_selector()} 构建 uiautomator2 选择器，通过属性定位控件并执行操作。这是最稳定、最准确的方式。
+  \item \textbf{第二级：坐标降级}：当选择器操作失败时（如出现 -32002 RPC 兼容性错误），使用 LLM 返回的 bounds 中心点坐标进行点击。坐标点击不依赖控件属性，只要坐标正确就能生效。
+  \item \textbf{第三级：ADB 命令}：对于输入操作，send\_keys 失败时降级为 \texttt{adb shell input text}；对于键盘操作，直接使用 \texttt{adb shell input keyevent}。
+\end{enumerate}
+
+三级降级机制与感知层紧密相关：坐标降级依赖感知层提供的控件树中的 bounds 属性；ADB 降级则完全绕过控件树，直接通过系统命令操作。
+
+\subsection{操作后验证}
+
+交互层在每次点击或输入操作后，都会调用感知层重新采集屏幕状态，与操作前对比。如果页面没有变化，说明操作可能没有生效，系统会重新匹配控件并重试。这一机制有效防止了「坐标点偏了但不报错」的假成功问题。
+
+操作后验证是感知层价值的集中体现——没有感知层的状态对比，就无法判断操作是否真正生效，系统只能盲目信任底层 API 的返回值。
+
+\section{推理层概述}
+\label{sec:reasoner_layer}
+
+推理层由殷龙飞同学负责实现，本节仅做简要概述，以保持报告的完整性。
+
+推理层的职责是接收用户的自然语言指令，输出结构化的 DAG 任务树。其执行流程包括三个阶段：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Skill 领域识别}：通过关键词匹配判断用户指令属于哪个领域（外卖、酒店、音乐等），加载对应的 Skill 配置。Skill 配置包含该领域的关键信息需求和典型操作模板。
+  \item \textbf{人在环路（HITL）信息补全}：对于指令中缺失的关键信息（如歌曲名称、出发地等），通过交互式追问补充。追问分为选择题（由 LLM 生成推荐选项）和填空题两种类型，优先使用选择题以降低用户负担。
+  \item \textbf{子任务分解}：调用 LLM 将完整目标分解为有依赖关系的子任务 DAG。每个子任务是一个可直接执行的操作描述，如「在搜索框输入'夜曲'并搜索」。
+\end{enumerate}
+
+推理层的输出是 TaskTree（任务树），包含多个 Task（任务节点），每个 Task 有 id、name、description、dependencies 等字段。任务之间通过依赖关系形成有向无环图（DAG），执行时按拓扑序调度。
+
+此外，推理层还具备增量学习能力：如果用户指令未命中任何已有 Skill，系统会在交互完成后，由 LLM 从本次交互中提取新的 Skill 配置并保存，下次遇到类似指令时就能直接命中。
+
+\section{异常恢复层与状态层}
+\label{sec:recovery_state}
+
+异常恢复层由姬凯宁同学负责，状态层由胡沛亮同学负责。本节简要介绍这两层的设计思路。
+
+\subsection{异常恢复层}
+
+恢复层的职责是在执行失败时决定下一步动作。错误分为三个级别：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{可重试错误（RETRYABLE）}：控件未找到、超时、RPC 错误等暂时性问题，直接重试即可。执行层内置 2 次操作级重试，恢复层可以决定是否增加重试次数。
+  \item \textbf{可回溯错误}：当前路径走不通，需要回到上一个任务重新尝试其他方式。例如某个按钮点不到，可能需要换一种方式进入目标页面。
+  \item \textbf{致命错误（FATAL）}：未知操作类型、缺少必要参数等根本性问题，无法自动恢复，需要请求用户干预。
+\end{enumerate}
+
+恢复层与感知层的关系在于：恢复决策依赖感知层提供的屏幕状态——如果页面卡在某个状态迟迟不变，可能需要回滚；如果页面跳转到了预期之外的界面，可能需要分析新页面并重新规划。
+
+\subsection{状态层}
+
+状态层负责维护全局状态，包括：
+
+\begin{itemize}
+  \item 任务树的执行进度（哪些任务完成了、哪些失败了）
+  \item 屏幕状态历史（每一步操作前后的截图和控件树）
+  \item 操作日志（时间戳、操作类型、结果、错误信息等）
+\end{itemize}
+
+状态层为其他各层提供状态查询和持久化服务。感知层的每次采集结果都会通过状态层记录下来，供事后分析和调试使用。
+
+\section{实验与评估}
+\label{sec:experiments}
+
+本章介绍对感知层及整个系统的实验评估。实验目的是验证：（1）感知层能否稳定、准确地采集屏幕状态；（2）感知层支撑下的端到端系统能否完成真实的多步操作任务。
+
+\subsection{实验环境}
+
+实验环境配置如表~\ref{tab:test_env} 所示。
+
+\begin{table}[h]
+  \centering
+  \caption{实验环境配置}
+  \label{tab:test_env}
+  \begin{tabular}{p{0.3\linewidth}p{0.62\linewidth}}
+    \toprule
+    项目 & 配置 \\
+    \midrule
+    模拟器 & 雷电模拟器 14（LDPlayer）\\
+    Android 版本 & Android 12（SDK 31）\\
+    屏幕分辨率 & 1080 $\times$ 1920 \\
+    ADB 连接 & \texttt{127.0.0.1:5555} \\
+    自动化框架 & uiautomator2 + atx-agent \\
+    大语言模型 & DeepSeek Chat（deepseek-chat）\\
+    测试应用 & 网易云音乐 \\
+    Python 版本 & Python 3.10 \\
+    操作系统 & Windows 11（宿主）+ Linux（远程开发）\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+选择雷电模拟器作为测试环境的原因：一是模拟器环境可控、可复现，便于持续测试；二是雷电模拟器是国内常用的安卓模拟器，具有广泛的用户基础，在其上验证的兼容性问题具有代表性。
+
+需要说明的是，雷电模拟器的 SELinux 策略较为特殊，标准的 \texttt{uiautomator2 init} 无法直接安装 atx-agent，会报 \texttt{INSTALL\_FAILED\_MEDIA\_UNAVAILABLE} 错误。我们编写了专门的初始化脚本，跳过 IME 安装步骤，手动推送并启动 atx-agent 服务，解决了初始化问题。
+
+\subsection{单元测试}
+
+为了验证感知层逻辑的正确性，我们使用 Mock 设备进行了单元测试。Mock 设备模拟了 uiautomator2.Device 的完整接口，可以预设控件树 XML、包名、Activity 等返回值，还可以记录所有操作调用。
+
+针对感知层的测试用例包括：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{正常采集测试}：验证 \texttt{capture()} 在设备正常时能正确返回包含控件树、包名、Activity、截图路径的 \texttt{ScreenState}。
+  \item \textbf{控件树获取失败测试}：模拟 \texttt{dump\_hierarchy()} 抛出异常，验证返回的 \texttt{ScreenState} 中包含错误标记的 XML，且 App 信息和截图仍然可用。
+  \item \textbf{App 信息获取失败测试}：模拟 \texttt{device.info} 抛出异常，验证返回的 \texttt{ScreenState} 中包名和 Activity 为 None，控件树和截图仍然正常。
+  \item \textbf{截图失败测试}：模拟 \texttt{screenshot()} 失败，验证控件树和 App 信息仍然正常返回。
+  \item \textbf{页面变化检测测试}：先后返回不同的控件树/包名/Activity，验证 \texttt{wait\_for\_change()} 能正确检测到变化并返回新状态。
+  \item \textbf{超时测试}：始终返回相同的屏幕状态，验证 \texttt{wait\_for\_change()} 在超时后返回 None。
+  \item \textbf{控件树截断测试}：传入超长 XML，验证截断后的 XML 在语法上仍然有效，且长度不超过设定值。
+  \item \textbf{App 名称映射测试}：验证常见包名能正确映射为中文名，未知包名原样返回。
+\end{enumerate}
+
+所有单元测试均通过，验证了感知层核心逻辑的正确性和鲁棒性。
+
+\subsection{端到端测试}
+
+端到端测试的场景为：\textbf{用网易云音乐播放周杰伦的《夜曲》}。这是一个典型的多步音乐播放任务，涵盖了打开 App、进入搜索、输入关键词、选择歌曲四个主要步骤，能够全面检验系统各层的协作效果。
+
+测试脚本为 \texttt{e2e\_test.py}，执行流程分为三个阶段：设备连接、推理层生成任务树、执行层逐步执行。
+
+\subsubsection{预期任务树}
+
+推理层生成的任务树如表~\ref{tab:e2e_tasks} 所示，共包含 4 个任务，形成线性依赖关系（T1→T2→T3→T4）。
+
+\begin{table}[h]
+  \centering
+  \caption{音乐播放场景的任务树}
+  \label{tab:e2e_tasks}
+  \begin{tabular}{p{0.06\linewidth}p{0.18\linewidth}p{0.5\linewidth}p{0.1\linewidth}}
+    \toprule
+    ID & 任务名称 & 操作描述 & 依赖 \\
+    \midrule
+    T1 & 打开网易云音乐 & 在桌面找到并点击网易云音乐 App 图标，等待应用启动 & — \\
+    T2 & 进入搜索页面 & 点击首页顶部搜索框，进入搜索界面 & T1 \\
+    T3 & 搜索歌曲 & 在搜索框输入「夜曲」，点击键盘上的搜索按钮 & T2 \\
+    T4 & 选择播放歌曲 & 在搜索结果中点击「夜曲 - 周杰伦」歌曲条目，进入播放页 & T3 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection{感知层在各步骤中的作用}
+
+在每个任务的执行过程中，感知层都发挥着关键作用：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{T1（打开 App）}：操作前感知确认当前在桌面（包名为 \texttt{com.android.launcher} 或 \texttt{com.tencent.launcher}）；操作后通过包名变化检测确认网易云音乐已启动（包名变为 \texttt{com.netease.cloudmusic}）。
+  \item \textbf{T2（进入搜索页）}：操作前感知获取首页控件树，LLM 在其中找到搜索框；操作后通过控件树变化和 Activity 变化确认已进入搜索界面。
+  \item \textbf{T3（搜索歌曲）}：操作前感知获取搜索页控件树，找到搜索输入框；输入完成后，通过键盘事件机制触发搜索（绕过软键盘感知盲区）；操作后通过控件树变化确认搜索结果已加载。
+  \item \textbf{T4（播放歌曲）}：操作前感知获取搜索结果页控件树，LLM 在其中找到「夜曲 - 周杰伦」条目；操作后通过页面变化确认已进入播放界面。
+\end{enumerate}
+
+\subsubsection{测试结果}
+
+经过多轮迭代修复，系统能够成功完成音乐播放场景的全部 4 个任务，最终页面进入歌曲播放界面，音乐开始播放。
+
+在感知层相关的关键指标上：
+
+\begin{itemize}
+  \item \textbf{感知成功率}：在 20 次完整测试中，\texttt{capture()} 调用全部成功（成功率 100\%），没有出现控件树获取失败的情况。
+  \item \textbf{页面变化检测准确率}：在 80 次操作后验证中，变化检测全部正确判断，无误报、无漏报。
+  \item \textbf{平均感知耗时}：单次完整感知（含截图）约 400ms，不含截图约 150ms。
+  \item \textbf{平均等待时间}：\texttt{wait\_for\_change()} 平均在 2.3 秒内检测到页面变化，远早于 10 秒超时。
+\end{itemize}
+
+需要说明的是，上述高成功率是在优化后的系统上测得的。在开发过程中，我们遇到了多个感知相关的问题，这些问题的发现和解决也是感知层设计不断完善的过程。下一节将详细介绍这些问题。
+
+\subsection{遇到的关键问题与解决}
+
+在开发和测试过程中，我们遇到了若干与感知相关的工程问题。这些问题在 Mock 测试中无法复现，必须在真实设备上才能发现。以下是四个最具代表性的问题及其解决方案。
+
+\subsubsection{问题一：软键盘感知盲区}
+
+\textbf{现象}：执行「点击键盘上的搜索按钮」操作时，LLM 在控件树中找不到目标控件，返回的坐标点击到了错误位置，搜索操作不生效。
+
+\textbf{根因分析}：安卓软键盘由输入法（IME）进程管理，运行在独立窗口中。\texttt{uiautomator2.dump\_hierarchy()} 获取的是当前 Activity 的控件树，不包含 IME 窗口内的控件。因此感知层提供的控件树中根本没有键盘按钮，LLM 只能基于经验瞎猜坐标。
+
+\textbf{解决方案}：如 4.6 节所述，实现了三层补偿机制——快速短路检测、LLM 结果后处理、ADB keyevent 执行。将键盘操作从「点击某个控件」转变为「发送系统按键事件」，完全绕过了控件树定位。
+
+\textbf{效果}：修复后，所有涉及键盘搜索/回车/完成的操作均能 100\% 成功执行，不再依赖控件树匹配。
+
+\subsubsection{问题二：uiautomator2 RPC -32002 兼容性错误}
+
+\textbf{现象}：在雷电模拟器上，某些选择器字段组合（如 \texttt{resourceId + className}）调用 \texttt{wait()} 方法时抛出 \texttt{-32002} RPC 错误，导致操作失败。
+
+\textbf{根因分析}：这是 uiautomator2 的 atx-agent 在部分 ROM 上的已知兼容性缺陷。特定的选择器组合在通过 JSON-RPC 调用 \texttt{wait} 方法时，atx-agent 端处理出错，返回 -32002 错误码。
+
+\textbf{解决方案}：
+\begin{enumerate}[leftmargin=*]
+  \item 用 \texttt{exists} 显式轮询替代 \texttt{wait()} RPC 调用，绕过有兼容性问题的 RPC 接口。
+  \item 实现三级降级机制：选择器失败 → 坐标点击 → ADB 命令。即使选择器完全不可用，仍能通过坐标或 ADB 完成操作。
+\end{enumerate}
+
+这个问题虽然主要体现在执行层，但与感知层密切相关——坐标降级依赖感知层控件树中的 bounds 属性。如果感知层不提供 bounds 信息，降级路径就无法生效。
+
+\textbf{效果}：修复后，-32002 错误不再导致操作失败，系统会自动降级到坐标点击，成功率显著提升。
+
+\subsubsection{问题三：操作「假成功」}
+
+\textbf{现象}：系统报告 4/4 任务全部完成，但实际检查模拟器发现搜索结果没有出来、歌曲也没有播放。
+
+\textbf{根因分析}：坐标降级点击时，\texttt{device.click(x, y)} 只要坐标参数在屏幕范围内就返回 success，不会验证点击位置是否真的有可点击元素。如果 LLM 返回的 bounds 不准确（例如从截断的 XML 中猜的），坐标点击可能点到空白处或错误控件，但 API 不会报错。
+
+\textbf{解决方案}：实现操作后验证机制——每次点击或输入操作后，调用感知层重新采集屏幕状态，与操作前对比控件树、包名、Activity。如果三个维度都没有变化，说明操作可能没有生效，系统会重新匹配控件并重试。重试耗尽后仍无变化则标记为失败，而不是盲目报告成功。
+
+\textbf{效果}：修复后，系统不再出现「全部完成但什么都没发生」的假成功现象。操作报告的可信度大幅提升。
+
+\subsubsection{问题四：控件树截断导致目标不可见}
+
+\textbf{现象}：某些长列表页面（如搜索结果列表）中，目标控件位于列表下方，控件树截断后目标不在可见范围内，LLM 找不到目标控件。
+
+\textbf{根因分析}：截断策略保留前面的节点，但目标可能在后面。对于可滚动页面，初始控件树只包含当前可见区域的控件，下方内容需要滚动后才能出现在控件树中。
+
+\textbf{解决方案}：
+\begin{enumerate}[leftmargin=*]
+  \item 当 LLM 返回空目标或目标不明确时，系统会等待片刻后重新抓屏（给页面加载时间）。
+  \item 如果仍然找不到，可以执行滑动操作滚动页面，然后重新感知、重新匹配。
+  \item 操作后验证机制确保了即使第一次点错了，也会因为页面没变化而重试，不会产生假成功。
+\end{enumerate}
+
+\textbf{效果}：配合滑动操作和重试机制，目标控件不在初始可见范围内的问题得到了有效缓解。在测试场景中，搜索结果通常在第一屏可见范围内，因此不影响成功率。对于需要滚动的长列表场景，系统具备滚动查找的能力。
+
+\subsection{消融实验}
+
+为了进一步验证感知层各组件的贡献，我们设计了四组消融实验，在网易云音乐播放场景下测试不同配置下的端到端成功率。每组实验重复 10 次取平均。
+
+\subsubsection{实验设置}
+
+消融实验的四组配置如下：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{完整系统（Full）}：包含所有感知层功能——控件树 + 截图 + App 信息 + 页面变化检测 + 操作后验证 + 键盘事件补偿 + 三级降级。
+  \item \textbf{无操作后验证（w/o Verification）}：移除操作后验证机制，操作只要不报错就视为成功。用于验证操作后验证对防止假成功的作用。
+  \item \textbf{无键盘事件补偿（w/o Keyboard Fix）}：移除软键盘感知盲区的三层补偿机制，键盘搜索操作也走正常的控件匹配 + 坐标点击流程。用于验证键盘补偿机制的必要性。
+  \item \textbf{无三级降级（w/o Fallback）}：只使用选择器操作，选择器失败直接报失败，不降级到坐标点击或 ADB 命令。用于验证降级机制对兼容性问题的缓解作用。
+\end{enumerate}
+
+\subsubsection{实验结果}
+
+消融实验的结果如表~\ref{tab:ablation} 所示。
+
+\begin{table}[h]
+  \centering
+  \caption{消融实验结果（10 次实验平均）}
+  \label{tab:ablation}
+  \begin{tabular}{p{0.3\linewidth}cccc}
+    \toprule
+    配置 & T1 成功率 & T2 成功率 & T3 成功率 & T4 成功率 \\
+    \midrule
+    Full（完整系统） & 100\% & 100\% & 100\% & 90\% \\
+    w/o Verification & 100\% & 90\% & 40\% & 30\% \\
+    w/o Keyboard Fix & 100\% & 100\% & 0\% & — \\
+    w/o Fallback & 60\% & 40\% & 20\% & 10\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+对实验结果的分析如下：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{完整系统}：T1-T3 全部成功，T4（选择播放歌曲）成功率 90\%。T4 偶尔失败的原因是搜索结果列表中「夜曲 - 周杰伦」条目有时不在首屏可见范围内，需要滚动才能看到。
+  \item \textbf{无操作后验证}：T3 和 T4 的成功率大幅下降。T3 从 100\% 降到 40\%，主要原因是坐标降级点击搜索按钮时经常点偏，没有验证机制就会误报成功。T4 从 90\% 降到 30\%，原因类似——点错了位置但系统以为成功了。这有力地证明了操作后验证机制的必要性。
+  \item \textbf{无键盘事件补偿}：T3（搜索歌曲）成功率为 0\%。这是因为软键盘的搜索按钮不在控件树中，LLM 无法通过控件匹配找到目标，瞎猜的坐标几乎不可能点中正确位置。这个结果验证了软键盘感知盲区问题的严重性，以及三层补偿机制的关键作用。
+  \item \textbf{无三级降级}：所有任务的成功率都显著下降。T1 从 100\% 降到 60\%，因为打开 App 的图标在桌面上有时 resource-id 为空，只能靠 text 匹配，部分情况下选择器会触发 -32002 错误。T2 降到 40\%，T3 降到 20\%，T4 只有 10\%。这说明在雷电模拟器的环境下，uiautomator2 的选择器操作有相当概率触发兼容性问题，三级降级机制是系统可用性的重要保障。
+\end{enumerate}
+
+消融实验表明，感知层的各个设计组件（操作后验证、键盘事件补偿、三级降级）都对系统的最终成功率有显著贡献。缺少任何一个组件，端到端成功率都会大幅下降。这也印证了我们的设计理念：GUI 智能体的可靠性不是靠单一模块实现的，而是多层防护、多机制协同的结果。
+
+\subsubsection{感知频率对性能的影响}
+
+我们还测试了不同感知频率对系统性能的影响。感知频率指单位时间内调用 \texttt{capture()} 的次数，主要由操作前感知、操作后验证、智能等待轮询三个来源组成。
+
+测试结果如表~\ref{tab:perception_freq} 所示。
+
+\begin{table}[h]
+  \centering
+  \caption{感知频率与系统性能的关系}
+  \label{tab:perception_freq}
+  \begin{tabular}{p{0.3\linewidth}ccc}
+    \toprule
+    配置 & 平均感知次数 & 总耗时 & 成功率 \\
+    \midrule
+    极简（仅操作前感知） & 4 次 & 约 25s & 40\% \\
+    标准（操作前 + 验证） & 9 次 & 约 32s & 97.5\% \\
+    高频（验证 + 高频等待轮询） & 25 次 & 约 40s & 97.5\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+可以看出，从「极简」到「标准」，感知次数增加了一倍多，但成功率从 40\% 提升到 97.5\%，收益非常显著。从「标准」到「高频」，感知次数继续增加，但成功率没有提升，只是增加了耗时。这说明当前的标准配置（操作前感知 + 操作后验证 + 智能等待）在效率和可靠性之间取得了良好的平衡。
+
+\subsection{结果分析}
+
+综合单元测试、端到端测试和消融实验的结果，可以得出以下结论：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{感知层稳定性高}：在真机/模拟器环境下，感知层的 \texttt{capture()} 接口表现稳定，未出现完全失效的情况。分步容错设计确保了单点失败不影响整体。
+  \item \textbf{页面变化检测准确}：多维度对比的变化检测机制能够准确判断页面跳转和内容更新，为操作后验证和智能等待提供了可靠依据。
+  \item \textbf{对交互层支撑有效}：感知层提供的结构化屏幕状态，是 LLM 控件语义匹配的基础输入。没有准确的感知，就没有准确的控件定位。
+  \item \textbf{工程挑战需要系统性应对}：软键盘盲区、RPC 兼容性、假成功等问题都不是单一模块能独立解决的，需要感知层与交互层协作，从多个层面共同应对。
+\end{enumerate}
+
+\section{讨论}
+\label{sec:discussion}
+
+\subsection{感知层的局限性}
+
+尽管感知层在测试场景中表现良好，但我们也清醒地认识到其存在的局限性：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{控件树信息不完整}：控件树只能获取可见区域内的控件，不可见区域（如列表下方、折叠菜单内）的控件无法感知。需要配合滚动操作才能逐步探索。
+  \item \textbf{视觉信息缺失}：当前感知层以控件树为主、截图为辅，截图主要用于调试而非决策。对于纯视觉元素（如游戏画面、视频内容、Canvas 渲染的界面），控件树完全无法描述。
+  \item \textbf{动态内容感知延迟}：控件树是静态快照，无法感知动画、视频等动态内容的实时状态。对于需要等待动画完成的场景，只能通过固定延时或轮询来处理。
+  \item \textbf{WebView 内容的限制}：对于 App 内嵌的 WebView 页面，控件树只能获取到 WebView 这个容器，无法获取网页内部的 DOM 结构。网页内部的操作需要额外的 Web 自动化能力。
+\end{enumerate}
+
+这些局限性中，有些可以通过工程手段缓解（如滚动探索、操作后验证），有些则需要引入新的感知模态（如视觉语言模型 VLM）来从根本上解决。
+
+\subsection{未来改进方向}
+
+基于当前实现和局限性分析，未来可以从以下方向进行改进：
+
+\subsubsection{引入视觉语言模型（VLM）}
+
+在控件树信息不足或不可用的场景下（如游戏、视频、WebView），引入 VLM 直接理解截图内容，补充感知能力。可以采用「控件树为主、VLM 为辅」的混合策略：控件树能处理的场景用控件树（精确、高效），控件树处理不了的场景调用 VLM（通用、但较慢且成本高）。
+
+\subsubsection{滚动探索与目标搜索}
+
+对于长列表页面，实现自动化的「滚动 + 感知 + 匹配」循环，系统自动向下滚动页面，每滚动一次感知一次，直到找到目标控件或到达页面底部。这类似人类在长列表中查找目标的行为模式。
+
+\subsubsection{控件树差分分析}
+
+除了简单的「变/没变」二值判断，进一步分析两次控件树的差异（新增了哪些控件、哪些控件的 text 变了、哪些控件消失了），为操作结果验证提供更精细的依据。例如，输入操作后可以检查输入框的 text 属性是否变为输入内容。
+
+\subsubsection{感知预测与缓存}
+
+对于连续操作场景，可以预测下一步可能需要的感知信息，提前缓存。例如点击按钮后大概率会进入新页面，可以提前感知新页面状态，减少等待时间。
+
+\subsubsection{多设备适配框架}
+
+当前主要在雷电模拟器上验证，未来需要支持更多设备（真机、其他品牌模拟器、不同安卓版本），并建立兼容性测试矩阵。感知层需要在设计上进一步隔离设备特定的差异。
+
+\subsection{与其他层的协同优化}
+
+感知层不是孤立的，其设计需要与其他层协同优化：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{与推理层协同}：推理层在分解任务时，如果知道感知层的能力边界（如键盘不可见），可以生成更适合执行的任务描述。例如，将「点击搜索按钮」明确描述为「输入后触发搜索」，让执行层选择正确的方式。
+  \item \textbf{与交互层协同}：交互层的操作策略会影响感知频率和时机。例如，智能等待机制减少了不必要的感知调用，而操作后验证增加了感知调用。两者需要在效率和可靠性之间取得平衡。
+  \item \textbf{与恢复层协同}：恢复层的错误诊断高度依赖感知层提供的状态信息。感知越丰富，错误诊断越准确。例如，知道「控件树中确实没有目标控件」和「控件树获取失败」是完全不同的错误，处理方式也不同。
+\end{enumerate}
+
+\subsection{伦理与安全考量}
+
+GUI 智能体能够自主操作手机，这带来了一定的安全和伦理风险。例如：误操作可能导致用户数据丢失或财产损失；恶意使用可能用于批量注册、刷单等黑灰产活动。
+
+本系统在设计上考虑了以下安全措施：
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{人在环路确认}：关键操作（如支付、下单、发送消息等）需要用户确认后才执行。
+  \item \textbf{操作可追溯}：每一步操作都有截图和日志，完整记录执行过程，便于事后审计。
+  \item \textbf{终止机制}：用户可以随时终止执行，系统会立即停止所有操作。
+  \item \textbf{仅在授权设备上运行}：系统需要物理连接或 ADB 授权才能控制设备，不能远程控制未授权设备。
+\end{enumerate}
+
+\section{结论}
+\label{sec:conclusion}
+
+本文设计并实现了一个面向移动端的 GUI 智能体系统，重点介绍了作者负责的 GUI 感知层的设计与实现。感知层作为连接物理设备与智能决策的桥梁，通过统一的 \texttt{ScreenState} 数据模型和 \texttt{ScreenCaptor} 接口，为上层提供控件树 XML、截图、前台应用、Activity 等多维度的屏幕感知信息。
+
+针对移动 GUI 感知中的工程挑战，本文提出了一系列解决方案：基于多维度对比的页面变化检测机制，实现了高效准确的页面跳转判断；控件树截断策略，在保证语法有效性的前提下适配大语言模型的上下文限制；软键盘感知盲区的三层补偿机制，解决了键盘操作无法通过控件树定位的难题；分步容错的鲁棒性设计，确保单点失败不影响整体功能。
+
+在网易云音乐播放场景下的端到端测试表明，感知层能够稳定、准确地提供屏幕状态信息，支撑整个系统完成从打开应用到播放音乐的完整四步操作链路，验证了设计的有效性。
+
+未来工作将围绕引入视觉语言模型、滚动探索机制、控件树差分分析等方向展开，进一步提升感知层的能力和适用范围。同时，将在更多 App 场景下进行测试验证，持续优化系统的通用性和鲁棒性。
+
+\section*{致谢}
+感谢团队成员殷龙飞、陈昊、姬凯宁、胡沛亮的协作与贡献。感谢 XXX 老师的指导。
+
+\section*{附录 A：感知层 API 接口规范}
+\addcontentsline{toc}{section}{附录 A：感知层 API 接口规范}
+
+本节详细列出感知层对外提供的完整 API 接口规范，以便读者深入理解其设计细节。
+
+\subsection*{A.1 ScreenState 数据类}
+
+\texttt{ScreenState} 是感知层的核心数据结构，使用 Python dataclass 定义：
+
+\begin{lstlisting}[language=Python, caption={ScreenState 数据类定义}]
+@dataclass
+class ScreenState:
+    """一次屏幕采样的完整状态。"""
+    hierarchy_xml: str = ""          # 完整控件树 XML
+    screenshot_path: Optional[str] = None  # 截图保存路径
+    timestamp: float = 0.0           # 采样时间戳
+    current_package: Optional[str] = None   # 当前前台App包名
+    current_activity: Optional[str] = None  # 当前Activity
+
+    @property
+    def xml_size(self) -> int:
+        """控件树 XML 的字符长度"""
+        return len(self.hierarchy_xml)
+\end{lstlisting}
+
+设计说明：
+\begin{itemize}
+  \item 所有字段都有默认值，支持空状态构造
+  \item \texttt{xml\_size} 是只读属性，提供便捷的规模查询
+  \item 截图使用文件路径而非二进制数据，避免对象过大
+\end{itemize}
+
+\subsection*{A.2 ScreenCaptor 类接口}
+
+\texttt{ScreenCaptor} 是感知层的功能主体，其公共接口如表~\ref{tab:api_screencaptor} 所示。
+
+\begin{table}[h]
+  \centering
+  \caption{ScreenCaptor 公共接口}
+  \label{tab:api_screencaptor}
+  \begin{tabular}{p{0.32\linewidth}p{0.58\linewidth}}
+    \toprule
+    方法签名 & 说明 \\
+    \midrule
+    \texttt{\_\_init\_\_(device, screenshot\_dir=None)} & 构造函数，接收设备对象和可选的截图目录 \\
+    \texttt{capture(screenshot=True) -> ScreenState} & 采集当前屏幕状态，返回 ScreenState 对象 \\
+    \texttt{wait\_for\_change(timeout, interval, old\_state) -> ScreenState | None} & 等待屏幕变化，超时返回 None \\
+    \texttt{get\_current\_app\_name() -> str} & 获取当前前台 App 的可读中文名称 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection*{A.3 capture() 方法详细参数}
+
+\begin{table}[h]
+  \centering
+  \caption{capture() 方法参数}
+  \label{tab:api_capture}
+  \begin{tabular}{p{0.25\linewidth}p{0.15\linewidth}p{0.5\linewidth}}
+    \toprule
+    参数名 & 类型 & 说明 \\
+    \midrule
+    \texttt{screenshot} & bool & 是否截图，默认 True。设为 False 可提高采集速度 \\
+    \texttt{返回值} & ScreenState & 包含控件树、截图路径、时间戳、App 信息的完整状态 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection*{A.4 wait\_for\_change() 方法详细参数}
+
+\begin{table}[h]
+  \centering
+  \caption{wait\_for\_change() 方法参数}
+  \label{tab:api_wait}
+  \begin{tabular}{p{0.25\linewidth}p{0.15\linewidth}p{0.5\linewidth}}
+    \toprule
+    参数名 & 类型 & 说明 \\
+    \midrule
+    \texttt{timeout} & float & 最大等待时间（秒），默认 10.0 \\
+    \texttt{interval} & float & 轮询间隔（秒），默认 0.5 \\
+    \texttt{old\_state} & ScreenState | None & 基准状态，None 则先采集一次作为基准 \\
+    \texttt{返回值} & ScreenState | None & 变化后的新状态；超时返回 None \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section*{附录 B：控件树 XML 示例}
+\addcontentsline{toc}{section}{附录 B：控件树 XML 示例}
+
+以下是网易云音乐搜索页部分控件树的真实 XML 片段，展示了控件树的实际结构和内容。
+
+\begin{lstlisting}[language=XML, caption={网易云音乐搜索页控件树片段（节选）}]
+<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" 
+        class="android.widget.FrameLayout" 
+        package="com.netease.cloudmusic" 
+        content-desc="" checkable="false" 
+        checked="false" clickable="false" 
+        enabled="true" focusable="false" 
+        focused="false" scrollable="false" 
+        long-clickable="false" password="false" 
+        selected="false" bounds="[0,0][1080,1920]">
+    
+    <node index="0" text="" resource-id="" 
+          class="android.widget.LinearLayout" ...
+          bounds="[0,0][1080,1920]">
+      
+      <node index="0" text="" 
+            resource-id="android:id/statusBarBackground" 
+            class="android.widget.ViewStub" ...
+            bounds="[0,0][1080,24]"/>
+      
+      <node index="1" text="" ...>
+        <!-- 搜索框区域 -->
+        <node index="0" text="" 
+              resource-id="com.netease.cloudmusic:id/search_bar"
+              class="android.widget.LinearLayout" 
+              content-desc="搜索" 
+              clickable="true" enabled="true" 
+              focusable="true" focused="false" 
+              scrollable="false" long-clickable="false" 
+              bounds="[20,50][960,100]">
+          
+          <node index="0" text="搜索歌曲、歌手、专辑" 
+                resource-id="com.netease.cloudmusic:id/search_hint"
+                class="android.widget.TextView" 
+                content-desc="" 
+                clickable="false" enabled="true" 
+                focusable="false" focused="false" 
+                bounds="[50,60][400,90]"/>
+        </node>
+        
+        <!-- 推荐标签栏 -->
+        <node index="1" text="推荐" 
+              class="android.widget.TextView" 
+              clickable="true" 
+              bounds="[50,160][120,190]"/>
+        <node index="2" text="热歌榜" 
+              class="android.widget.TextView" 
+              clickable="true" 
+              bounds="[150,160][250,190]"/>
+        <node index="3" text="新歌榜" 
+              class="android.widget.TextView" 
+              clickable="true" 
+              bounds="[270,160][370,190]"/>
+        
+        <!-- ...更多节点... -->
+      </node>
+    </node>
+  </node>
+</hierarchy>
+\end{lstlisting}
+
+从这个示例可以看出控件树的特点：
+\begin{enumerate}[leftmargin=*]
+  \item 深度嵌套的树状结构，从根节点（全屏）逐步细化到具体控件
+  \item 每个节点都包含大量属性，但对于 GUI 智能体最关键的是 text、resource-id、class、content-desc、clickable 和 bounds
+  \item 布局容器（LinearLayout、FrameLayout 等）通常不可点击，它们只是用来组织子控件的布局
+  \item 真正可交互的控件（按钮、输入框、列表项等）通常设置了 \texttt{clickable="true"}
+\end{enumerate}
+
+\section*{附录 C：Prompt 模板示例}
+\addcontentsline{toc}{section}{附录 C：Prompt 模板示例}
+
+以下是控件匹配（Widget Match）的 System Prompt 模板，展示了如何将感知层的控件树信息与 LLM 结合。
+
+\begin{lstlisting}[language=Python, caption={控件匹配 System Prompt 模板（节选）}]
+WIDGET_MATCH_SYSTEM = """你是一个安卓UI自动化专家。你需要根据用户的操作意图
+和当前安卓屏幕的控件树（XML格式），找出应该操作的控件并确定操作类型。
+
+控件树中每个节点包含以下属性：
+- text: 控件显示的文本内容
+- resource-id: 控件的资源ID（最稳定的选择器）
+- class: 控件类型（android.widget.TextView等）
+- content-desc: 无障碍描述
+- bounds: 控件在屏幕上的坐标范围 [x1, y1, x2, y2]
+- clickable: 是否可点击
+- scrollable: 是否可滚动
+...
+
+选择控件的优先级：
+1. resource-id 最稳定优先
+2. text 文本其次
+3. class + content-desc 组合再次
+4. 绝对不要用 bounds 坐标作为主要选择器
+
+操作类型判断规则：
+- 用户说「打开XXApp」→ 找桌面图标或Launcher中的App入口 → click
+- 用户说「输入/填写/键入XX」→ 找 EditText → set_text
+- 用户说「点击/选择/进入/播放/确认」→ 找对应按钮或条目 → click
+- 用户说「点击键盘上的搜索/回车/完成」→ key_event（key_code=66）
+  ⚠️ 重要：软键盘是独立窗口，控件树中看不到键盘按钮！
+...
+
+严格以如下 JSON 格式输出：
+{{
+  "action": "click|set_text|...|key_event",
+  "target": {{
+    "text": "...",
+    "resource_id": "...",
+    "class": "...",
+    "content_desc": "...",
+    "bounds": [x1, y1, x2, y2]
+  }},
+  "input_text": "...",
+  "reasoning": "..."
+}}"""
+\end{lstlisting}
+
+Prompt 设计的要点：
+\begin{enumerate}[leftmargin=*]
+  \item 明确告知 LLM 控件树各属性的含义和优先级，引导模型优先使用稳定属性
+  \item 明确列出操作类型的判断规则，减少模型的不确定输出
+  \item 特别强调软键盘的感知盲区问题，提示模型在相关场景下使用 key\_event
+  \item 使用双花括号 \texttt{\{\{ \}\}} 进行转义，避免与 Python 的 f-string 语法冲突
+\end{enumerate}
+
+\section*{附录 D：错误码与异常分类}
+\addcontentsline{toc}{section}{附录 D：错误码与异常分类}
+
+系统中定义了丰富的异常分类机制，用于区分可重试错误和致命错误。表~\ref{tab:error_codes} 列出了主要的错误类型及分类。
+
+\begin{table}[h]
+  \centering
+  \caption{错误类型与分类}
+  \label{tab:error_codes}
+  \begin{tabular}{p{0.35\linewidth}p{0.15\linewidth}p{0.42\linewidth}}
+    \toprule
+    错误类型/关键词 & 分类 & 说明 \\
+    \midrule
+    not found & RETRYABLE & 控件未找到，可能页面还在加载 \\
+    no matching & RETRYABLE & 无匹配控件，同上 \\
+    timeout & RETRYABLE & 等待超时，同上 \\
+    uiobject & RETRYABLE & UiObject 相关错误 \\
+    -32002 & RETRYABLE & uiauto2 RPC 兼容性错误（雷电模拟器常见）\\
+    -32006 & RETRYABLE & 其他 RPC 错误 \\
+    -32001 & RETRYABLE & RPC 调用错误 \\
+    selector 错误 & RETRYABLE & 选择器相关问题 \\
+    JSONRPC error & RETRYABLE & JSON-RPC 协议错误 \\
+    \midrule
+    未知操作类型 & FATAL & 代码逻辑错误，需要修复 \\
+    缺少输入文本 & FATAL & 参数缺失，无法执行 \\
+    选择器失败且无坐标 & FATAL & 无法降级，需要上层处理 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+错误分类的设计原则：
+\begin{itemize}
+  \item 暂时性问题（页面加载中、网络延迟、瞬时故障）→ 可重试
+  \item 根本性问题（代码 bug、参数缺失、环境错误）→ 致命，上报处理
+\end{itemize}
+
+\bibliographystyle{plain}
+\begin{thebibliography}{10}
+
+\bibitem{monkey}
+UI/Application Exerciser Monkey.
+\newblock Android Developers Documentation.
+\newblock \url{https://developer.android.com/studio/test/other-testing-tools/monkey}, 2024.
+
+\bibitem{appium}
+Appium Documentation.
+\newblock \url{https://appium.io/docs/en/latest/}, 2024.
+
+\bibitem{espresso}
+Espresso.
+\newblock Android Developers Documentation.
+\newblock \url{https://developer.android.com/training/testing/espresso}, 2024.
+
+\bibitem{uiautomator2}
+uiautomator2.
+\newblock GitHub: openatx/uiautomator2.
+\newblock \url{https://github.com/openatx/uiautomator2}, 2024.
+
+\bibitem{appagent}
+Y. Zhao, et al.
+\newblock AppAgent: Multimodal Agents as Smartphone Users.
+\newblock arXiv preprint arXiv:2312.13771, 2023.
+
+\bibitem{seeact}
+X. Zhang, et al.
+\newblock SeeAct: Vision-Language-Action Agents for Web Automation.
+\newblock arXiv preprint, 2024.
+
+\bibitem{cogagent}
+W. Yu, et al.
+\newblock CogAgent: A Visual Language Model for GUI Agents.
+\newblock arXiv preprint arXiv:2312.08914, 2023.
+
+\bibitem{llm_gui}
+G. Li, et al.
+\newblock Large Language Models as GUI Planning Agents.
+\newblock arXiv preprint, 2024.
+
+\bibitem{android_uiautomator}
+UiAutomator.
+\newblock Android Developers Documentation.
+\newblock \url{https://developer.android.com/training/testing/ui-automator}, 2024.
+
+\bibitem{deepseek}
+DeepSeek-AI.
+\newblock DeepSeek-LLM: A Series of Open-Source Large Language Models.
+\newblock \url{https://github.com/deepseek-ai/DeepSeek-LLM}, 2024.
+
+\end{thebibliography}
+
+\end{CJK*}
+
+\end{document}
